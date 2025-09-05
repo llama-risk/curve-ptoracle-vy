@@ -18,9 +18,9 @@ underlying_oracle: public(address)
 slope: public(uint256)  # Linear discount slope with 1e8 precision
 intercept: public(uint256)  # Linear discount intercept with 1e8 precision
 max_update_interval: public(uint256)
+pt_expiry: public(uint256)
 
 # Access control
-owner: public(address)
 llamarisk: public(address)
 curve_dao: public(address)
 
@@ -59,7 +59,6 @@ def __init__(
     _llamarisk: address,
     _curve_dao: address
 ):
-    self.owner = msg.sender
     self.pt = _pt
     self.underlying_oracle = _underlying_oracle
     self.slope = _slope
@@ -69,7 +68,8 @@ def __init__(
     self.curve_dao = _curve_dao
     self.last_update = block.timestamp
     self.last_discount_update = block.timestamp  # Initialize discount update timestamp
-    
+    self.pt_expiry = staticcall PT(self.pt).expiry()
+
     # Initialize price
     self.current_price = self._calculate_price()
 
@@ -77,25 +77,26 @@ def __init__(
 @internal
 @view
 def _calculate_price() -> uint256:
-    # Get PT expiry
-    pt_expiry: uint256 = staticcall PT(self.pt).expiry()
-    
-    if pt_expiry <= block.timestamp:
-        return 0  # Expired PT has no value
-    
+
+    # Get underlying oracle price and apply discount
+    underlying_price: uint256 = staticcall Oracle(self.underlying_oracle).price()
+
+    if self.pt_expiry <= block.timestamp:
+        return (underlying_price * 1 * DISCOUNT_PRECISION) // DISCOUNT_PRECISION
+
+
     # Calculate discount based on time to maturity
-    time_to_maturity: uint256 = pt_expiry - block.timestamp
+    time_to_maturity: uint256 = self.pt_expiry - block.timestamp
+
     # Linear discount with 1e8 precision: discount = slope * time_in_seconds + intercept
     discount: uint256 = self.slope * time_to_maturity + self.intercept
     
+    # TODO: We have to decide what to do if discount >= DISCOUNT_PRECISION (never should be the case but just in case)
     if discount >= DISCOUNT_PRECISION:
-        return 0  # Full discount
+        discount = 1 * DISCOUNT_PRECISION  # Full discount
     
     # Calculate discount factor (between 0 and 1 with 1e8 precision)
     discount_factor: uint256 = DISCOUNT_PRECISION - discount
-    
-    # Get underlying oracle price and apply discount
-    underlying_price: uint256 = staticcall Oracle(self.underlying_oracle).price()
     
     # Return discounted price: underlying_price * discount_factor / DISCOUNT_PRECISION
     return (underlying_price * discount_factor) // DISCOUNT_PRECISION
