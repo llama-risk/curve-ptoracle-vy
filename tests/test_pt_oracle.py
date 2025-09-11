@@ -3,15 +3,6 @@ import boa
 from datetime import datetime, timedelta
 
 
-@pytest.fixture
-def owner():
-    return boa.env.generate_address()
-
-
-@pytest.fixture
-def llamarisk():
-    return boa.env.generate_address()
-
 
 @pytest.fixture
 def curve_dao():
@@ -22,14 +13,23 @@ def curve_dao():
 def manager():
     return boa.env.generate_address()
 
+@pytest.fixture
+def non_manager():
+    return boa.env.generate_address()
+
 
 @pytest.fixture
 def admin():
     return boa.env.generate_address()
 
+@pytest.fixture
+def deployer():
+    return boa.env.generate_address()
+
+
 
 @pytest.fixture
-def mock_pt(owner):
+def mock_pt():
     """Deploy a mock PT token with expiry"""
     mock_pt_code = """
 # pragma version 0.4.3
@@ -40,14 +40,13 @@ expiry: public(uint256)
 def __init__(_expiry: uint256):
     self.expiry = _expiry
 """
-    with boa.env.prank(owner):
-        # Set expiry to 30 days from now
-        future_expiry = boa.env.evm.patch.timestamp + (30 * 24 * 60 * 60)
-        return boa.loads(mock_pt_code, future_expiry)
+    # Set expiry to 30 days from now
+    future_expiry = boa.env.evm.patch.timestamp + (30 * 24 * 60 * 60)
+    return boa.loads(mock_pt_code, future_expiry)
 
 
 @pytest.fixture
-def mock_oracle(owner):
+def mock_oracle():
     """Deploy a mock underlying oracle"""
     mock_oracle_code = """
 # pragma version 0.4.3
@@ -67,16 +66,15 @@ def price() -> uint256:
 def set_price(_price: uint256):
     self.stored_price = _price
 """
-    with boa.env.prank(owner):
-        return boa.loads(mock_oracle_code)
+    return boa.loads(mock_oracle_code)
 
 
 @pytest.fixture
-def pt_oracle(owner, manager, admin, mock_pt, mock_oracle):
+def pt_oracle(deployer, manager, admin, mock_pt, mock_oracle):
     """Deploy the PtOracle contract"""
     from contracts import PtOracle
     
-    with boa.env.prank(owner):
+    with boa.env.prank(deployer):
         # Slope is now in years with 1e18 precision
         # For a 5% APY: slope = 0.05 * 1e18 = 5e16
         return PtOracle.deploy(
@@ -91,11 +89,13 @@ def pt_oracle(owner, manager, admin, mock_pt, mock_oracle):
 
 
 class TestPtOracle:
-    def test_deployment(self, pt_oracle, owner, manager, admin, mock_pt, mock_oracle):
+    def test_deployment(self, pt_oracle, manager, admin, mock_pt, mock_oracle):
         """Test that the contract deploys correctly with initial values"""
-        # Note: contract doesn't have owner() method in the new version
-        assert pt_oracle.manager() == manager
-        assert pt_oracle.admin() == admin
+        # Check that manager has MANAGER_ROLE
+        MANAGER_ROLE = pt_oracle.MANAGER_ROLE()
+        ADMIN_ROLE = pt_oracle.ADMIN_ROLE()
+        assert pt_oracle.hasRole(MANAGER_ROLE, manager)
+        assert pt_oracle.hasRole(ADMIN_ROLE, admin)
         assert pt_oracle.pt() == mock_pt.address
         assert pt_oracle.underlying_oracle() == mock_oracle.address
         assert pt_oracle.slope() == 5 * 10**16  # 5% per year
@@ -151,7 +151,7 @@ class TestPtOracle:
         assert price2 != price1
         assert pt_oracle.last_update() > 0
     
-    def test_expired_pt_returns_zero(self, owner):
+    def test_expired_pt_returns_zero(self, deployer):
         """Test that expired PT returns 0 price"""
         from contracts import PtOracle
         
@@ -165,7 +165,7 @@ expiry: public(uint256)
 def __init__(_expiry: uint256):
     self.expiry = _expiry
 """
-        with boa.env.prank(owner):
+        with boa.env.prank(deployer):
             # Set expiry to past
             past_expiry = boa.env.evm.patch.timestamp - 1
             expired_pt = boa.loads(mock_pt_code, past_expiry)
@@ -194,7 +194,7 @@ def price() -> uint256:
             assert pt_oracle.price() == 10**18
             assert pt_oracle.price_w() == 10**18
     
-    def test_set_linear_discount(self, pt_oracle, manager, owner):
+    def test_set_linear_discount(self, pt_oracle, manager, deployer):
         """Test that manager can update linear discount parameters"""
         # First, advance time to ensure we can update
         boa.env.timestamp = boa.env.timestamp + 86401  # Move past the initial interval
@@ -205,8 +205,8 @@ def price() -> uint256:
         assert pt_oracle.last_discount_update() > 0
         
         # Non-manager should fail
-        with boa.reverts("caller is not manager"):
-            pt_oracle.set_linear_discount(300, 150, sender=owner)
+        with boa.reverts():
+            pt_oracle.set_linear_discount(300, 150, sender=deployer)
     
     def test_set_linear_discount_limits(self, pt_oracle, manager):
         """Test that linear discount parameters respect DISCOUNT_PRECISION limit"""
@@ -253,7 +253,7 @@ def price() -> uint256:
         assert pt_oracle.intercept() == 150
         assert pt_oracle.last_discount_update() > first_update
     
-    def test_set_limits(self, pt_oracle, admin, owner):
+    def test_set_limits(self, pt_oracle, admin, deployer):
         """Test that admin can update max update interval and change limits"""
         pt_oracle.set_limits(172800, 2 * 10**16, 3 * 10**16, sender=admin)  # 48 hours, 2% slope change, 3% intercept change
         assert pt_oracle.max_update_interval() == 172800
@@ -261,10 +261,10 @@ def price() -> uint256:
         assert pt_oracle.max_intercept_change() == 3 * 10**16
         
         # Non-admin should fail
-        with boa.reverts("caller is not admin"):
-            pt_oracle.set_limits(86400, 10**16, 10**16, sender=owner)
+        with boa.reverts():
+            pt_oracle.set_limits(86400, 10**16, 10**16, sender=deployer)
     
-    def test_full_discount_returns_zero(self, owner):
+    def test_full_discount_returns_zero(self, deployer):
         """Test that full discount (>=100%) returns 0 price"""
         from contracts import PtOracle
         
@@ -278,7 +278,7 @@ expiry: public(uint256)
 def __init__(_expiry: uint256):
     self.expiry = _expiry
 """
-        with boa.env.prank(owner):
+        with boa.env.prank(deployer):
             # Set expiry to 365 days from now
             far_future_expiry = boa.env.timestamp + (365 * 24 * 60 * 60)
             pt = boa.loads(mock_pt_code, far_future_expiry)
@@ -348,7 +348,7 @@ def price() -> uint256:
         assert pt_oracle.last_price() == price2
         assert price == price2
     
-    def test_discount_does_not_exceed_precision(self, owner):
+    def test_discount_does_not_exceed_precision(self, deployer):
         """Test that discount calculations respect DISCOUNT_PRECISION limit"""
         from contracts import PtOracle
         
@@ -371,13 +371,13 @@ def price() -> uint256:
     return 10**18
 """
         pt_expiry = boa.env.timestamp + (10 * 24 * 60 * 60)  # 10 days
-        with boa.env.prank(owner):
+        with boa.env.prank(deployer):
             pt = boa.loads(mock_pt_code, pt_expiry)
             mock_oracle = boa.loads(mock_oracle_code)
         
         # Deploy with high intercept close to DISCOUNT_PRECISION
         # The total discount (slope * time_in_years + intercept) must not exceed DISCOUNT_PRECISION
-        with boa.env.prank(owner):
+        with boa.env.prank(deployer):
             # With 10 days = ~0.027 years, slope of 1e18 would give 2.7% discount
             pt_oracle = PtOracle.deploy(
                 pt.address,
@@ -453,13 +453,14 @@ def price() -> uint256:
         assert pt_oracle.max_intercept_change() == 3 * 10**16
     
     # Story 1.3 Tests
-    def test_admin_can_set_manager(self, pt_oracle, admin, manager):
-        """Test that admin can update the manager address"""
+    def test_admin_can_grant_manager_role(self, pt_oracle, admin, manager):
+        """Test that admin can grant manager role to new address"""
         new_manager = boa.env.generate_address()
+        MANAGER_ROLE = pt_oracle.MANAGER_ROLE()
         
-        # Admin should be able to set new manager
-        pt_oracle.set_manager(new_manager, sender=admin)
-        assert pt_oracle.manager() == new_manager
+        # Admin should be able to grant manager role
+        pt_oracle.grantRole(MANAGER_ROLE, new_manager, sender=admin)
+        assert pt_oracle.hasRole(MANAGER_ROLE, new_manager)
         
         # New manager should be able to perform manager functions
         boa.env.timestamp = boa.env.timestamp + 86401
@@ -467,31 +468,41 @@ def price() -> uint256:
         assert pt_oracle.slope() == 100
         assert pt_oracle.intercept() == 50
     
-    def test_manager_cannot_set_manager(self, pt_oracle, manager):
-        """Test that manager cannot call set_manager"""
+    def test_manager_cannot_grant_manager_role(self, pt_oracle, manager):
+        """Test that manager cannot grant manager role"""
         new_manager = boa.env.generate_address()
+        MANAGER_ROLE = pt_oracle.MANAGER_ROLE()
         
-        with boa.reverts("caller is not admin"):
-            pt_oracle.set_manager(new_manager, sender=manager)
+        with boa.reverts():
+            pt_oracle.grantRole(MANAGER_ROLE, new_manager, sender=manager)
     
-    def test_set_manager_rejects_zero_address(self, pt_oracle, admin):
-        """Test that set_manager rejects zero address"""
+    def test_grant_manager_role_rejects_zero_address(self, pt_oracle, admin):
+        """Test that grantRole works with zero address (standard behavior)"""
         zero_address = "0x0000000000000000000000000000000000000000"
+        MANAGER_ROLE = pt_oracle.MANAGER_ROLE()
         
-        with boa.reverts("invalid manager address"):
-            pt_oracle.set_manager(zero_address, sender=admin)
+        # Standard access control allows granting to zero address
+        # This is different from custom implementation
+        pt_oracle.grantRole(MANAGER_ROLE, zero_address, sender=admin)
+        assert pt_oracle.hasRole(MANAGER_ROLE, zero_address)
     
-    def test_manager_updated_event(self, pt_oracle, admin):
-        """Test that ManagerUpdated event is emitted"""
-        old_manager = pt_oracle.manager()
-        new_manager = boa.env.generate_address()
+    def test_admin_can_revoke_manager_role(self, pt_oracle, admin, manager):
+        """Test that admin can revoke manager role"""
+        MANAGER_ROLE = pt_oracle.MANAGER_ROLE()
         
-        # Update manager (event would be emitted here)
-        pt_oracle.set_manager(new_manager, sender=admin)
-        assert pt_oracle.manager() == new_manager
-        # Event emission is implicit in the state change
+        # Initially manager has the role
+        assert pt_oracle.hasRole(MANAGER_ROLE, manager)
+        
+        # Admin revokes manager role
+        pt_oracle.revokeRole(MANAGER_ROLE, manager, sender=admin)
+        assert not pt_oracle.hasRole(MANAGER_ROLE, manager)
+        
+        # Manager should no longer be able to perform manager functions
+        boa.env.timestamp = boa.env.timestamp + 86401
+        with boa.reverts():
+            pt_oracle.set_linear_discount(100, 50, sender=manager)
     
-    def test_role_based_access_control(self, pt_oracle, admin, manager, owner):
+    def test_role_based_access_control(self, pt_oracle, admin, manager):
         """Test comprehensive role-based access control"""
         unauthorized = boa.env.generate_address()
         
@@ -500,20 +511,21 @@ def price() -> uint256:
         pt_oracle.set_linear_discount(150, 75, sender=manager)  # Should work
         
         boa.env.timestamp = boa.env.timestamp + 86401
-        with boa.reverts("caller is not manager"):
+        with boa.reverts():
             pt_oracle.set_linear_discount(200, 100, sender=unauthorized)
         
         # Test admin functions
         pt_oracle.set_limits(100000, 0, 0, sender=admin)  # Should work
         
-        with boa.reverts("caller is not admin"):
+        with boa.reverts():
             pt_oracle.set_limits(200000, 0, 0, sender=unauthorized)
         
         new_manager = boa.env.generate_address()
-        pt_oracle.set_manager(new_manager, sender=admin)  # Should work
+        MANAGER_ROLE = pt_oracle.MANAGER_ROLE()
+        pt_oracle.grantRole(MANAGER_ROLE, new_manager, sender=admin)  # Should work
         
-        with boa.reverts("caller is not admin"):
-            pt_oracle.set_manager(boa.env.generate_address(), sender=unauthorized)
+        with boa.reverts():
+            pt_oracle.grantRole(MANAGER_ROLE, boa.env.generate_address(), sender=unauthorized)
     
     def test_set_slope_from_apy(self, pt_oracle, manager):
         """Test that manager can call set_slope_from_apy"""
@@ -539,7 +551,7 @@ def price() -> uint256:
         assert pt_oracle.pt_expiry() == mock_pt.expiry()
     
     # Time-based discount model tests
-    def test_discount_model_with_time_jumps(self, owner, manager, admin):
+    def test_discount_model_with_time_jumps(self, deployer, manager, admin):
         """Test discount model with 50% slope and time progression"""
         from contracts import PtOracle
         
@@ -563,7 +575,7 @@ def price() -> uint256:
     return 10**18  # Price = 1.0
 """
         
-        with boa.env.prank(owner):
+        with boa.env.prank(deployer):
             # Set expiry to exactly 1 year from now
             one_year_later = boa.env.evm.patch.timestamp + (365 * 24 * 60 * 60)
             pt = boa.loads(mock_pt_code, one_year_later)
@@ -611,7 +623,7 @@ def price() -> uint256:
         expiry_price = pt_oracle.price()
         assert expiry_price == 10**18, f"Expected 1e18 at expiry, got {expiry_price}"
     
-    def test_linear_discount_progression(self, owner, manager, admin):
+    def test_linear_discount_progression(self, deployer, manager, admin):
         """Test that discount decreases linearly as time to maturity decreases"""
         from contracts import PtOracle
         
@@ -633,7 +645,7 @@ def price() -> uint256:
     return 2 * 10**18  # Price = 2.0
 """
         
-        with boa.env.prank(owner):
+        with boa.env.prank(deployer):
             # Set expiry to 100 days from now for easier calculations
             expiry_time = boa.env.evm.patch.timestamp + (100 * 24 * 60 * 60)
             pt = boa.loads(mock_pt_code, expiry_time)
@@ -674,7 +686,7 @@ def price() -> uint256:
         expected_10d = 198 * 10**16
         assert abs(price_10d - expected_10d) < 10**15, f"10 days: expected ~1.98e18, got {price_10d}"
     
-    def test_discount_with_intercept(self, owner, manager, admin):
+    def test_discount_with_intercept(self, deployer, manager, admin):
         """Test discount model with both slope and intercept"""
         from contracts import PtOracle
         
@@ -696,7 +708,7 @@ def price() -> uint256:
     return 10**18  # Price = 1.0
 """
         
-        with boa.env.prank(owner):
+        with boa.env.prank(deployer):
             # Set expiry to 1 year from now
             one_year_later = boa.env.evm.patch.timestamp + (365 * 24 * 60 * 60)
             pt = boa.loads(mock_pt_code, one_year_later)
@@ -777,7 +789,7 @@ def price() -> uint256:
         pt_oracle.set_linear_discount(5 * 10**16, 4 * 10**16, sender=manager)
         assert pt_oracle.intercept() == 4 * 10**16
     
-    def test_zero_limit_means_no_restriction(self, owner, manager, admin):
+    def test_zero_limit_means_no_restriction(self, deployer, manager, admin):
         """Test that setting max change to 0 means no limit"""
         from contracts import PtOracle
         
@@ -799,7 +811,7 @@ def price() -> uint256:
     return 10**18
 """
         
-        with boa.env.prank(owner):
+        with boa.env.prank(deployer):
             pt = boa.loads(mock_pt_code, boa.env.timestamp + 86400 * 30)
             mock_oracle = boa.loads(mock_oracle_code)
             

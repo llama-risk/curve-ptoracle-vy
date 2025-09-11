@@ -3,6 +3,20 @@
 # @license MIT
 # Security: Nonreentrancy is enabled by default in Vyper 0.4.3 for all external functions
 
+from ethereum.ercs import IERC165
+
+implements: IERC165
+
+from pcaversaccio.snekmate.src.snekmate.auth.interfaces import IAccessControl
+
+implements: IAccessControl
+
+from pcaversaccio.snekmate.src.snekmate.auth import access_control
+
+initializes: access_control
+
+exports: access_control.__interface__
+
 # Interface for Principal Token example pt token: 0x6d98a2b6cdbf44939362a3e99793339ba2016af4
 interface PendlePT:
     def expiry() -> uint256: view
@@ -15,6 +29,10 @@ interface Oracle:
 
 # Constants
 DISCOUNT_PRECISION: constant(uint256) = 10**18
+
+# Role constants
+MANAGER_ROLE: public(constant(bytes32)) = keccak256("MANAGER_ROLE")
+ADMIN_ROLE: public(constant(bytes32)) = keccak256("ADMIN_ROLE")
 
 # State variables
 pt: public(address)
@@ -30,19 +48,7 @@ max_intercept_change: public(
     uint256
 )  # Maximum allowed change in intercept per update
 
-# Access control
-manager: public(address)
-admin: public(address)
-
-# Modifiers
-@internal
-def _only_manager():
-    assert msg.sender == self.manager, "caller is not manager"
-
-
-@internal
-def _only_admin():
-    assert msg.sender == self.admin, "caller is not admin"
+# Note: Access control is now handled by snekmate's access_control module
 
 
 # Price storage
@@ -82,9 +88,7 @@ event OracleInitialized:
     initial_intercept: uint256
 
 
-event ManagerUpdated:
-    old_manager: indexed(address)
-    new_manager: indexed(address)
+# Manager updates are now handled through AccessControl's RoleGranted/RoleRevoked events
 
 
 # Constructor
@@ -111,6 +115,24 @@ def __init__(
     ), "initial intercept exceeds precision"
     assert _max_update_interval > 0, "invalid update interval"
 
+    # Initialize access control (msg.sender becomes default admin)
+    access_control.__init__()
+
+    # Set ADMIN_ROLE as the admin for MANAGER_ROLE
+    access_control._set_role_admin(MANAGER_ROLE, ADMIN_ROLE)
+
+    # Set DEFAULT_ADMIN_ROLE as the admin for ADMIN_ROLE
+    access_control._set_role_admin(
+        ADMIN_ROLE, access_control.DEFAULT_ADMIN_ROLE
+    )
+
+    # Grant roles
+    access_control._grant_role(MANAGER_ROLE, _manager)
+    access_control._grant_role(ADMIN_ROLE, _admin)
+
+    # Revoke default admin role from deployer
+    access_control._revoke_role(access_control.DEFAULT_ADMIN_ROLE, msg.sender)
+
     self.pt = _pt
     self.underlying_oracle = _underlying_oracle
     self.slope = _slope
@@ -118,8 +140,6 @@ def __init__(
     self.max_update_interval = _max_update_interval
     self.max_slope_change = 0  # Initialize to 0 (no limit)
     self.max_intercept_change = 0  # Initialize to 0 (no limit)
-    self.manager = _manager
-    self.admin = _admin
     self.last_update = block.timestamp
     self.last_discount_update = (
         block.timestamp
@@ -232,8 +252,6 @@ def _update_discount_params(_slope: uint256, _intercept: uint256):
             slope_change <= self.max_slope_change
         ), "slope change exceeds limit"
 
-
-    # Check intercept change limit (0 means no limit)
     if self.max_intercept_change > 0:
         intercept_change: uint256 = 0
         if _intercept > old_intercept:
@@ -244,8 +262,6 @@ def _update_discount_params(_slope: uint256, _intercept: uint256):
             intercept_change <= self.max_intercept_change
         ), "intercept change exceeds limit"
 
-
-    # Update parameters
     self.slope = _slope
     self.intercept = _intercept
     self.last_discount_update = block.timestamp
@@ -262,7 +278,7 @@ def _update_discount_params(_slope: uint256, _intercept: uint256):
 @external
 @nonpayable
 def set_linear_discount(_slope: uint256, _intercept: uint256):
-    self._only_manager()
+    access_control._check_role(MANAGER_ROLE, msg.sender)
 
     # Check rate limiting - Manager can only update once per max_update_interval
     assert (
@@ -279,7 +295,7 @@ def set_slope_from_apy(expected_apy: uint256):
     @notice Set slope based on expected APY, with intercept set to 0
     @param expected_apy Expected APY with 1e18 precision (e.g., 5% = 5e16)
     """
-    self._only_manager()
+    access_control._check_role(MANAGER_ROLE, msg.sender)
 
     # Check rate limiting - Manager can only update once per max_update_interval
     assert (
@@ -313,37 +329,12 @@ def set_slope_from_apy(expected_apy: uint256):
 # Write functions - Admin only
 @external
 @nonpayable
-def set_manager(_new_manager: address) -> bool:
-    """
-    @notice Update the manager address (admin-only function)
-    @param _new_manager The new manager address
-    @return True on successful update
-    """
-    self._only_admin()
-
-    # Validate new manager address is not zero
-    assert _new_manager != empty(address), "invalid manager address"
-
-    # Store old manager for event
-    old_manager: address = self.manager
-
-    # Update manager
-    self.manager = _new_manager
-
-    # Emit event
-    log ManagerUpdated(old_manager=old_manager, new_manager=_new_manager)
-
-    return True
-
-
-@external
-@nonpayable
 def set_limits(
     _max_update_interval: uint256,
     _max_slope_change: uint256,
     _max_intercept_change: uint256,
 ):
-    self._only_admin()
+    access_control._check_role(ADMIN_ROLE, msg.sender)
     # Store old values for event
     old_max_update_interval: uint256 = self.max_update_interval
     old_max_slope_change: uint256 = self.max_slope_change
