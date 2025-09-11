@@ -24,6 +24,12 @@ intercept: public(uint256)  # Linear discount intercept with 1e18 precision
 max_update_interval: public(uint256)
 pt_expiry: public(immutable(uint256))
 
+# Limit variables for slope and intercept changes (0 = no limit)
+max_slope_change: public(uint256)  # Maximum allowed change in slope per update
+max_intercept_change: public(
+    uint256
+)  # Maximum allowed change in intercept per update
+
 # Access control
 manager: public(address)
 admin: public(address)
@@ -57,6 +63,10 @@ event LinearDiscountUpdated:
 event LimitsUpdated:
     old_max_update_interval: uint256
     new_max_update_interval: uint256
+    old_max_slope_change: uint256
+    new_max_slope_change: uint256
+    old_max_intercept_change: uint256
+    new_max_intercept_change: uint256
 
 
 event PriceUpdated:
@@ -106,6 +116,8 @@ def __init__(
     self.slope = _slope
     self.intercept = _intercept
     self.max_update_interval = _max_update_interval
+    self.max_slope_change = 0  # Initialize to 0 (no limit)
+    self.max_intercept_change = 0  # Initialize to 0 (no limit)
     self.manager = _manager
     self.admin = _admin
     self.last_update = block.timestamp
@@ -139,8 +151,6 @@ def _calculate_price() -> uint256:
     if pt_expiry <= block.timestamp:
         return underlying_price
 
-
-    # Calculate time to maturity in seconds
     time_to_maturity_seconds: uint256 = pt_expiry - block.timestamp
 
     # Convert time to maturity to years with 1e18 precision
@@ -207,9 +217,33 @@ def _update_discount_params(_slope: uint256, _intercept: uint256):
     assert _slope <= DISCOUNT_PRECISION, "slope exceeds precision"
     assert _intercept <= DISCOUNT_PRECISION, "intercept exceeds precision"
 
-    # Store old values for event
+    # Store old values for event and limit checks
     old_slope: uint256 = self.slope
     old_intercept: uint256 = self.intercept
+
+    # Check slope change limit (0 means no limit)
+    if self.max_slope_change > 0:
+        slope_change: uint256 = 0
+        if _slope > old_slope:
+            slope_change = _slope - old_slope
+        else:
+            slope_change = old_slope - _slope
+        assert (
+            slope_change <= self.max_slope_change
+        ), "slope change exceeds limit"
+
+
+    # Check intercept change limit (0 means no limit)
+    if self.max_intercept_change > 0:
+        intercept_change: uint256 = 0
+        if _intercept > old_intercept:
+            intercept_change = _intercept - old_intercept
+        else:
+            intercept_change = old_intercept - _intercept
+        assert (
+            intercept_change <= self.max_intercept_change
+        ), "intercept change exceeds limit"
+
 
     # Update parameters
     self.slope = _slope
@@ -304,16 +338,26 @@ def set_manager(_new_manager: address) -> bool:
 
 @external
 @nonpayable
-def set_limits(_max_update_interval: uint256):
+def set_limits(
+    _max_update_interval: uint256,
+    _max_slope_change: uint256,
+    _max_intercept_change: uint256,
+):
     self._only_admin()
-    assert _max_update_interval > 0, "invalid update interval"
-
-    # Store old value for event
+    # Store old values for event
     old_max_update_interval: uint256 = self.max_update_interval
+    old_max_slope_change: uint256 = self.max_slope_change
+    old_max_intercept_change: uint256 = self.max_intercept_change
 
     self.max_update_interval = _max_update_interval
+    self.max_slope_change = _max_slope_change
+    self.max_intercept_change = _max_intercept_change
 
     log LimitsUpdated(
         old_max_update_interval=old_max_update_interval,
         new_max_update_interval=_max_update_interval,
+        old_max_slope_change=old_max_slope_change,
+        new_max_slope_change=_max_slope_change,
+        old_max_intercept_change=old_max_intercept_change,
+        new_max_intercept_change=_max_intercept_change,
     )
