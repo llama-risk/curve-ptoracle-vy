@@ -77,11 +77,13 @@ def pt_oracle(owner, manager, admin, mock_pt, mock_oracle):
     from contracts import PtOracle
     
     with boa.env.prank(owner):
+        # Slope is now in years with 1e18 precision
+        # For a 5% APY: slope = 0.05 * 1e18 = 5e16
         return PtOracle.deploy(
             mock_pt.address,  # PT token
             mock_oracle.address,  # underlying oracle
-            1,  # slope (very small slope)
-            0,   # intercept (0% with 1e8 precision)
+            5 * 10**16,  # slope (5% per year with 1e18 precision)
+            0,   # intercept (0% with 1e18 precision)
             86400,  # max_update_interval (24 hours)
             manager,
             admin
@@ -96,21 +98,29 @@ class TestPtOracle:
         assert pt_oracle.admin() == admin
         assert pt_oracle.pt() == mock_pt.address
         assert pt_oracle.underlying_oracle() == mock_oracle.address
-        assert pt_oracle.slope() == 1
+        assert pt_oracle.slope() == 5 * 10**16  # 5% per year
         assert pt_oracle.intercept() == 0
         assert pt_oracle.max_update_interval() == 86400
     
     def test_price_calculation(self, pt_oracle, mock_oracle):
         """Test that price() calculates the correct discounted price"""
         # The discount should be applied to the underlying price
-        # With 30 days to maturity, slope=1, intercept=0
-        # discount = (1 * 30*24*60*60) + 0 (in terms of 1e8 precision)
+        # With 30 days to maturity (30/365 years), slope=5e16 (5% per year), intercept=0
+        # time_to_maturity_years = (30 * 24 * 60 * 60 * 1e18) / (365 * 24 * 60 * 60)
+        # discount = (5e16 * time_to_maturity_years) / 1e18 + 0
         price = pt_oracle.price()
         
         # Price should be less than underlying due to discount
         underlying_price = mock_oracle.price()
         assert price < underlying_price
         assert price > 0
+        
+        # With 30 days = ~0.082 years, 5% APY gives ~0.41% discount
+        # So price should be about 99.59% of underlying
+        expected_discount_ratio = 30 / 365 * 0.05  # ~0.0041
+        expected_price = int(underlying_price * (1 - expected_discount_ratio))
+        # Allow for small rounding differences
+        assert abs(price - expected_price) < underlying_price // 1000  # Within 0.1%
     
     def test_price_w_caching(self, pt_oracle):
         """Test that price_w() caches the price correctly"""
@@ -288,7 +298,7 @@ def price() -> uint256:
 """
             mock_oracle = boa.loads(mock_oracle_code)
             
-            # Deploy with max intercept and some slope to cause exactly 100% discount
+            # Deploy with max intercept to cause exactly 100% discount
             # DISCOUNT_PRECISION = 10**18, so intercept at max will discount to 0
             pt_oracle = PtOracle.deploy(
                 pt.address,
@@ -321,7 +331,7 @@ def price() -> uint256:
     def test_precision_constant_renamed(self, pt_oracle):
         """Test that DISCOUNT_PRECISION is 10**18"""
         # This tests the precision used in discount calculations
-        # With slope=1 and 30 days to maturity, discount should be minimal
+        # With slope=5e16 (5% per year) and 30 days to maturity, discount should be ~0.41%
         price = pt_oracle.price()
         assert price > 0
         # Price should be calculated with 10**18 precision
@@ -370,12 +380,13 @@ def price() -> uint256:
             mock_oracle = boa.loads(mock_oracle_code)
         
         # Deploy with high intercept close to DISCOUNT_PRECISION
-        # The total discount (slope * time + intercept) must not exceed DISCOUNT_PRECISION
+        # The total discount (slope * time_in_years + intercept) must not exceed DISCOUNT_PRECISION
         with boa.env.prank(owner):
+            # With 10 days = ~0.027 years, slope of 1e18 would give 2.7% discount
             pt_oracle = PtOracle.deploy(
                 pt.address,
                 mock_oracle.address,
-                100,  # small slope 
+                10**18,  # 100% per year slope (will give ~2.7% for 10 days)
                 9 * 10**17,  # 90% intercept (0.9 * 10**18)
                 86400,
                 boa.env.generate_address(),
@@ -383,10 +394,11 @@ def price() -> uint256:
             )
         assert pt_oracle.intercept() == 9 * 10**17
         
-        # Price should be calculated without reverting
+        # With 10 days and high slope + intercept, should get significant discount
+        # Total discount = (1e18 * 10/365) / 1e18 + 0.9 = 0.027 + 0.9 = 0.927 (92.7%)
         price = pt_oracle.price()
         assert price > 0
-        assert price < 10**18  # Should be discounted
+        assert price < 10**17  # Should be heavily discounted (less than 10%)
     
     # Story 1.2 Tests  
     def test_rate_limiting_with_greater_than_operator(self, pt_oracle, manager):
@@ -515,12 +527,14 @@ def price() -> uint256:
         boa.env.timestamp = boa.env.timestamp + 86401
         
         # Manager should be able to call set_slope_from_apy
-        # APY of 5% (500 basis points) = 0.05 * 10**18 / 365 / 86400 per second
-        pt_oracle.set_slope_from_apy(5 * 10**16, sender=manager)  # 5% as 0.05 * 10**18
+        # APY of 10% = 0.10 * 10**18
+        pt_oracle.set_slope_from_apy(10**17, sender=manager)  # 10% as 0.10 * 10**18
         
-        # Verify slope was updated (exact value depends on calculation)
-        # slope should be apy / seconds_in_year = 5e16 / (365 * 86400) ≈ 1585489599
+        # The set_slope_from_apy function converts APY to a per-second slope
+        # But our new _calculate_price converts it back to years
+        # So the effective slope should work out correctly
         assert pt_oracle.slope() > 0
+        assert pt_oracle.intercept() == 0  # set_slope_from_apy sets intercept to 0
         assert pt_oracle.last_discount_update() > 0
     
     def test_interface_renamed_to_pendle_pt(self, pt_oracle, mock_pt):
@@ -529,3 +543,200 @@ def price() -> uint256:
         assert pt_oracle.pt() == mock_pt.address
         # Test that pt_expiry immutable is cached correctly
         assert pt_oracle.pt_expiry() == mock_pt.expiry()
+    
+    # Time-based discount model tests
+    def test_discount_model_with_time_jumps(self, owner, manager, admin):
+        """Test discount model with 50% slope and time progression"""
+        from contracts import PtOracle
+        
+        # Create PT with exactly 1 year expiry
+        mock_pt_code = """
+# pragma version 0.4.3
+
+expiry: public(uint256)
+
+@deploy
+def __init__(_expiry: uint256):
+    self.expiry = _expiry
+"""
+        # Create mock oracle with price = 1e18 (1.0)
+        mock_oracle_code = """
+# pragma version 0.4.3
+
+@view
+@external
+def price() -> uint256:
+    return 10**18  # Price = 1.0
+"""
+        
+        with boa.env.prank(owner):
+            # Set expiry to exactly 1 year from now
+            one_year_later = boa.env.evm.patch.timestamp + (365 * 24 * 60 * 60)
+            pt = boa.loads(mock_pt_code, one_year_later)
+            mock_oracle = boa.loads(mock_oracle_code)
+            
+            # Deploy with slope = 0.5 (50% per year with 1e18 precision)
+            # This means at 1 year to maturity, discount = 50%
+            pt_oracle = PtOracle.deploy(
+                pt.address,
+                mock_oracle.address,
+                5 * 10**17,  # slope = 0.5 (50% per year)
+                0,           # intercept = 0
+                86400,       # max_update_interval
+                manager,
+                admin
+            )
+        
+        # Test 1: At start (1 year to maturity)
+        # time_to_maturity = 1 year
+        # discount = 0.5 * 1.0 = 0.5 (50%)
+        # price = 1.0 * (1 - 0.5) = 0.5
+        initial_price = pt_oracle.price()
+        assert initial_price == 5 * 10**17, f"Expected 0.5e18, got {initial_price}"
+        
+        # Test 2: After 6 months (0.5 years to maturity)
+        # time_to_maturity = 0.5 years
+        # discount = 0.5 * 0.5 = 0.25 (25%)
+        # price = 1.0 * (1 - 0.25) = 0.75
+        boa.env.evm.patch.timestamp += (365 * 24 * 60 * 60) // 2  # Advance 6 months
+        six_month_price = pt_oracle.price()
+        assert six_month_price == 75 * 10**16, f"Expected 0.75e18, got {six_month_price}"
+        
+        # Test 3: Very close to expiry (1 day to maturity)
+        # time_to_maturity ≈ 1/365 years ≈ 0.00274 years
+        # discount = 0.5 * (1/365) ≈ 0.00137 (0.137%)
+        # price ≈ 1.0 * (1 - 0.00137) ≈ 0.99863
+        boa.env.evm.patch.timestamp = one_year_later - (24 * 60 * 60)  # 1 day before expiry
+        near_expiry_price = pt_oracle.price()
+        # Allow small rounding error
+        expected_near_expiry = 10**18 - (5 * 10**17 * 10**18 // (365 * 10**18))
+        assert abs(near_expiry_price - expected_near_expiry) < 10**14, f"Near expiry price mismatch: {near_expiry_price}"
+        
+        # Test 4: At expiry (should return underlying price)
+        boa.env.evm.patch.timestamp = one_year_later
+        expiry_price = pt_oracle.price()
+        assert expiry_price == 10**18, f"Expected 1e18 at expiry, got {expiry_price}"
+    
+    def test_linear_discount_progression(self, owner, manager, admin):
+        """Test that discount decreases linearly as time to maturity decreases"""
+        from contracts import PtOracle
+        
+        mock_pt_code = """
+# pragma version 0.4.3
+
+expiry: public(uint256)
+
+@deploy
+def __init__(_expiry: uint256):
+    self.expiry = _expiry
+"""
+        mock_oracle_code = """
+# pragma version 0.4.3
+
+@view
+@external
+def price() -> uint256:
+    return 2 * 10**18  # Price = 2.0
+"""
+        
+        with boa.env.prank(owner):
+            # Set expiry to 100 days from now for easier calculations
+            expiry_time = boa.env.evm.patch.timestamp + (100 * 24 * 60 * 60)
+            pt = boa.loads(mock_pt_code, expiry_time)
+            mock_oracle = boa.loads(mock_oracle_code)
+            
+            # Deploy with slope = 0.365 (36.5% per year)
+            # At 100 days = 100/365 years, discount = 0.365 * (100/365) = 0.1 (10%)
+            pt_oracle = PtOracle.deploy(
+                pt.address,
+                mock_oracle.address,
+                365 * 10**15,  # slope = 0.365 (36.5% per year)
+                0,             # intercept = 0
+                86400,
+                manager,
+                admin
+            )
+        
+        # Test at 100 days to maturity
+        # discount = 0.365 * (100/365) = 0.1 (10%)
+        # price = 2.0 * (1 - 0.1) = 1.8
+        price_100d = pt_oracle.price()
+        expected_100d = 18 * 10**17
+        assert abs(price_100d - expected_100d) < 10**15, f"100 days: expected ~1.8e18, got {price_100d}"
+        
+        # Test at 50 days to maturity
+        boa.env.evm.patch.timestamp += (50 * 24 * 60 * 60)
+        # discount = 0.365 * (50/365) = 0.05 (5%)
+        # price = 2.0 * (1 - 0.05) = 1.9
+        price_50d = pt_oracle.price()
+        expected_50d = 19 * 10**17
+        assert abs(price_50d - expected_50d) < 10**15, f"50 days: expected ~1.9e18, got {price_50d}"
+        
+        # Test at 10 days to maturity
+        boa.env.evm.patch.timestamp += (40 * 24 * 60 * 60)
+        # discount = 0.365 * (10/365) = 0.01 (1%)
+        # price = 2.0 * (1 - 0.01) = 1.98
+        price_10d = pt_oracle.price()
+        expected_10d = 198 * 10**16
+        assert abs(price_10d - expected_10d) < 10**15, f"10 days: expected ~1.98e18, got {price_10d}"
+    
+    def test_discount_with_intercept(self, owner, manager, admin):
+        """Test discount model with both slope and intercept"""
+        from contracts import PtOracle
+        
+        mock_pt_code = """
+# pragma version 0.4.3
+
+expiry: public(uint256)
+
+@deploy
+def __init__(_expiry: uint256):
+    self.expiry = _expiry
+"""
+        mock_oracle_code = """
+# pragma version 0.4.3
+
+@view
+@external
+def price() -> uint256:
+    return 10**18  # Price = 1.0
+"""
+        
+        with boa.env.prank(owner):
+            # Set expiry to 1 year from now
+            one_year_later = boa.env.evm.patch.timestamp + (365 * 24 * 60 * 60)
+            pt = boa.loads(mock_pt_code, one_year_later)
+            mock_oracle = boa.loads(mock_oracle_code)
+            
+            # Deploy with slope = 0.2 (20% per year) and intercept = 0.1 (10%)
+            # At 1 year: discount = 0.2 * 1.0 + 0.1 = 0.3 (30%)
+            pt_oracle = PtOracle.deploy(
+                pt.address,
+                mock_oracle.address,
+                2 * 10**17,  # slope = 0.2 (20% per year)
+                10**17,      # intercept = 0.1 (10%)
+                86400,
+                manager,
+                admin
+            )
+        
+        # Test at 1 year to maturity
+        # discount = 0.2 * 1.0 + 0.1 = 0.3 (30%)
+        # price = 1.0 * (1 - 0.3) = 0.7
+        initial_price = pt_oracle.price()
+        assert initial_price == 7 * 10**17, f"Expected 0.7e18, got {initial_price}"
+        
+        # Test at 0.5 years to maturity
+        # discount = 0.2 * 0.5 + 0.1 = 0.2 (20%)
+        # price = 1.0 * (1 - 0.2) = 0.8
+        boa.env.evm.patch.timestamp += (365 * 24 * 60 * 60) // 2
+        six_month_price = pt_oracle.price()
+        assert six_month_price == 8 * 10**17, f"Expected 0.8e18, got {six_month_price}"
+        
+        # Test very close to expiry
+        # discount ≈ 0.2 * 0 + 0.1 = 0.1 (10%)
+        # price ≈ 1.0 * (1 - 0.1) = 0.9
+        boa.env.evm.patch.timestamp = one_year_later - 3600  # 1 hour before expiry
+        near_expiry_price = pt_oracle.price()
+        # Should be very close to 0.9 (just intercept discount)
+        assert abs(near_expiry_price - 9 * 10**17) < 10**15, f"Near expiry price mismatch: {near_expiry_price}"

@@ -139,10 +139,21 @@ def _calculate_price() -> uint256:
     if pt_expiry <= block.timestamp:
         return underlying_price
 
-    time_to_maturity: uint256 = pt_expiry - block.timestamp
 
-    # Linear discount with 1e18 precision: discount = slope * time_in_seconds + intercept
-    discount: uint256 = self.slope * time_to_maturity + self.intercept
+    # Calculate time to maturity in seconds
+    time_to_maturity_seconds: uint256 = pt_expiry - block.timestamp
+
+    # Convert time to maturity to years with 1e18 precision
+    # 1 year = 365 * 24 * 60 * 60 = 31,536,000 seconds
+    SECONDS_PER_YEAR: uint256 = 365 * 24 * 60 * 60
+    time_to_maturity_years: uint256 = (
+        time_to_maturity_seconds * DISCOUNT_PRECISION
+    ) // SECONDS_PER_YEAR
+
+    # Linear discount with 1e18 precision: discount = (slope * time_to_maturity_years) / 1e18 + intercept
+    discount: uint256 = (
+        self.slope * time_to_maturity_years
+    ) // DISCOUNT_PRECISION + self.intercept
 
     # Ensure discount doesn't exceed precision (should never happen but critical for safety)
     assert discount <= DISCOUNT_PRECISION, "discount exceeds precision"
@@ -169,13 +180,9 @@ def price_w() -> uint256:
     if pt_expiry <= block.timestamp:
         return staticcall Oracle(self.underlying_oracle).price()
 
-
-    # If timestamp is the same, just return current price (no update needed)
     if block.timestamp == self.last_update:
         return self.last_price
 
-
-    # Calculate new price using linear discount model
     new_price: uint256 = self._calculate_price()
 
     # Store old price for event
@@ -236,7 +243,7 @@ def set_linear_discount(_slope: uint256, _intercept: uint256):
 def set_slope_from_apy(expected_apy: uint256):
     """
     @notice Set slope based on expected APY, with intercept set to 0
-    @param expected_apy Expected APY with 1e18 precision
+    @param expected_apy Expected APY with 1e18 precision (e.g., 5% = 5e16)
     """
     self._only_manager()
 
@@ -245,24 +252,26 @@ def set_slope_from_apy(expected_apy: uint256):
         block.timestamp > self.last_discount_update + self.max_update_interval
     ), "update interval not elapsed"
 
-    # Constants
-    SECONDS_PER_YEAR: uint256 = 365 * 24 * 60 * 60  # ~31,536,000 seconds
-
     # Validate APY is within reasonable bounds (e.g., max 1000% APY)
     assert expected_apy <= 10 * DISCOUNT_PRECISION, "APY exceeds maximum bound"
     assert expected_apy > 0, "APY must be positive"
 
-    # Calculate numerator and denominator to avoid precision loss
-    numerator: uint256 = expected_apy
-    denominator: uint256 = (
-        DISCOUNT_PRECISION + expected_apy
-    ) * SECONDS_PER_YEAR
+    # For linear discount model with yearly slope:
+    # If we want an APY of X%, the slope should be X% per year
+    # Since time_to_maturity is now in years with 1e18 precision,
+    # and discount = (slope * time_to_maturity_years) / 1e18
+    # We want: discount_per_year = expected_apy / (1 + expected_apy)
+
+    # Calculate the discount rate from APY
+    # discount_rate = APY / (1 + APY)
+    numerator: uint256 = expected_apy * DISCOUNT_PRECISION
+    denominator: uint256 = DISCOUNT_PRECISION + expected_apy
 
     # Ensure denominator won't cause division by zero
     assert denominator > 0, "invalid denominator"
 
-    # Calculate slope with proper precision
-    new_slope: uint256 = (numerator * DISCOUNT_PRECISION) // denominator
+    # Calculate slope (discount per year with 1e18 precision)
+    new_slope: uint256 = numerator // denominator
 
     self._update_discount_params(new_slope, 0)
 
