@@ -18,12 +18,12 @@ initializes: access_control
 exports: access_control.__interface__
 
 # Interface for Principal Token example pt token: 0x6d98a2b6cdbf44939362a3e99793339ba2016af4
-interface PendlePT:
+interface IPendlePT:
     def expiry() -> uint256: view
 
 
 # Interface for underlying oracle
-interface Oracle:
+interface IOracle:
     def price() -> uint256: view
 
 
@@ -36,7 +36,7 @@ ADMIN_ROLE: public(constant(bytes32)) = keccak256("ADMIN_ROLE")
 
 # State variables
 pt: public(address)
-underlying_oracle: public(address)
+underlying_oracle: public(IOracle)
 slope: public(uint256)  # Linear discount slope with 1e18 precision
 intercept: public(uint256)  # Linear discount intercept with 1e18 precision
 max_update_interval: public(uint256)
@@ -92,7 +92,7 @@ event OracleInitialized:
 @deploy
 def __init__(
     _pt: address,
-    _underlying_oracle: address,
+    _underlying_oracle: IOracle,
     _slope: uint256,
     _intercept: uint256,
     _max_update_interval: uint256,
@@ -101,7 +101,7 @@ def __init__(
 ):
     # Validate all addresses are non-zero
     assert _pt != empty(address), "invalid PT address"
-    assert _underlying_oracle != empty(address), "invalid oracle address"
+    assert _underlying_oracle != empty(IOracle), "invalid oracle address"
     assert _manager != empty(address), "invalid manager address"
     assert _admin != empty(address), "invalid admin address"
 
@@ -141,7 +141,7 @@ def __init__(
     self.last_discount_update = (
         block.timestamp
     )  # Initialize discount update timestamp
-    pt_expiry = staticcall PendlePT(_pt).expiry()
+    pt_expiry = staticcall IPendlePT(_pt).expiry()
 
     # Initialize price
     self.last_price = self._calculate_price()
@@ -149,7 +149,7 @@ def __init__(
     # Emit initialization event
     log OracleInitialized(
         pt=_pt,
-        underlying_oracle=_underlying_oracle,
+        underlying_oracle=_underlying_oracle.address,
         initial_slope=_slope,
         initial_intercept=_intercept,
     )
@@ -161,9 +161,7 @@ def __init__(
 def _calculate_price() -> uint256:
 
     # Get underlying oracle price and apply discount
-    underlying_price: uint256 = staticcall Oracle(
-        self.underlying_oracle
-    ).price()
+    underlying_price: uint256 = staticcall self.underlying_oracle.price()
 
     if pt_expiry <= block.timestamp:
         return underlying_price
@@ -205,7 +203,7 @@ def price() -> uint256:
 def price_w() -> uint256:
     # If PT has expired, return underlying oracle price
     if pt_expiry <= block.timestamp:
-        return staticcall Oracle(self.underlying_oracle).price()
+        return staticcall self.underlying_oracle.price()
 
     if block.timestamp == self.last_update:
         return self.last_price
