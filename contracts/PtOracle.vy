@@ -118,11 +118,6 @@ def __init__(
     # Set ADMIN_ROLE as the admin for MANAGER_ROLE
     access_control._set_role_admin(MANAGER_ROLE, ADMIN_ROLE)
 
-    # Set DEFAULT_ADMIN_ROLE as the admin for ADMIN_ROLE
-    access_control._set_role_admin(
-        ADMIN_ROLE, access_control.DEFAULT_ADMIN_ROLE
-    )
-
     # Grant roles
     access_control._grant_role(MANAGER_ROLE, _manager)
     access_control._grant_role(ADMIN_ROLE, _admin)
