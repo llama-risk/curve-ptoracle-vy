@@ -80,7 +80,7 @@ event PriceUpdated:
 
 event OracleInitialized:
     pt: indexed(address)
-    underlying_oracle: indexed(address)
+    underlying_oracle: indexed(IOracle)
     initial_slope: uint256
     initial_intercept: uint256
 
@@ -144,7 +144,7 @@ def __init__(
     # Emit initialization event
     log OracleInitialized(
         pt=_pt,
-        underlying_oracle=_underlying_oracle.address,
+        underlying_oracle=_underlying_oracle,
         initial_slope=_slope,
         initial_intercept=_intercept,
     )
