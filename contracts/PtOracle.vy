@@ -67,11 +67,8 @@ event LinearDiscountUpdated:
 
 
 event LimitsUpdated:
-    old_max_update_interval: uint256
     new_max_update_interval: uint256
-    old_max_slope_change: uint256
     new_max_slope_change: uint256
-    old_max_intercept_change: uint256
     new_max_intercept_change: uint256
 
 
@@ -335,20 +332,13 @@ def set_limits(
     _max_intercept_change: uint256,
 ):
     access_control._check_role(ADMIN_ROLE, msg.sender)
-    # Store old values for event
-    old_max_update_interval: uint256 = self.max_update_interval
-    old_max_slope_change: uint256 = self.max_slope_change
-    old_max_intercept_change: uint256 = self.max_intercept_change
 
     self.max_update_interval = _max_update_interval
     self.max_slope_change = _max_slope_change
     self.max_intercept_change = _max_intercept_change
 
     log LimitsUpdated(
-        old_max_update_interval=old_max_update_interval,
         new_max_update_interval=_max_update_interval,
-        old_max_slope_change=old_max_slope_change,
         new_max_slope_change=_max_slope_change,
-        old_max_intercept_change=old_max_intercept_change,
         new_max_intercept_change=_max_intercept_change,
     )
