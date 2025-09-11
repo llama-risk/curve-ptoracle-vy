@@ -371,10 +371,9 @@ def price() -> uint256:
     return 10**18
 """
         pt_expiry = boa.env.timestamp + (10 * 24 * 60 * 60)  # 10 days
-        with boa.env.prank(deployer):
-            pt = boa.loads(mock_pt_code, pt_expiry)
-            mock_oracle = boa.loads(mock_oracle_code)
-        
+        pt = boa.loads(mock_pt_code, pt_expiry)
+        mock_oracle = boa.loads(mock_oracle_code)
+    
         # Deploy with high intercept close to DISCOUNT_PRECISION
         # The total discount (slope * time_in_years + intercept) must not exceed DISCOUNT_PRECISION
         with boa.env.prank(deployer):
