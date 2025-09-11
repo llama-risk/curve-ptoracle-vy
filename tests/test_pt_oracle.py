@@ -323,7 +323,6 @@ def price() -> uint256:
         assert new_price > initial_price
         assert new_price < mock_oracle.price()  # Still discounted
     
-    # Story 1.1 Tests
     def test_precision_constant_renamed(self, pt_oracle):
         """Test that DISCOUNT_PRECISION is 10**18"""
         # This tests the precision used in discount calculations
@@ -395,7 +394,6 @@ def price() -> uint256:
         assert price > 0
         assert price < 10**17  # Should be heavily discounted (less than 10%)
     
-    # Story 1.2 Tests  
     def test_rate_limiting_with_greater_than_operator(self, pt_oracle, manager):
         """Test that rate limiting uses > operator, not >="""
         # Advance to allow first update
@@ -451,7 +449,6 @@ def price() -> uint256:
         assert pt_oracle.max_slope_change() == 5 * 10**16
         assert pt_oracle.max_intercept_change() == 3 * 10**16
     
-    # Story 1.3 Tests
     def test_admin_can_grant_manager_role(self, pt_oracle, admin, manager):
         """Test that admin can grant manager role to new address"""
         new_manager = boa.env.generate_address()
