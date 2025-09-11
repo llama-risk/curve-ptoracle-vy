@@ -1,7 +1,7 @@
 # pragma version 0.4.3
 # pragma optimize gas
-# @license MIT
-# Security: Nonreentrancy is enabled by default in Vyper 0.4.3 for all external functions
+# pragma nonreentrancy on
+# @license BUSL-1.1
 
 from ethereum.ercs import IERC165
 
