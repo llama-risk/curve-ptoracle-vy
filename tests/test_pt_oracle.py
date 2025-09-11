@@ -41,7 +41,7 @@ def __init__(_expiry: uint256):
     self.expiry = _expiry
 """
     # Set expiry to 30 days from now
-    future_expiry = boa.env.evm.patch.timestamp + (30 * 24 * 60 * 60)
+    future_expiry = boa.env.timestamp + (30 * 24 * 60 * 60)
     return boa.loads(mock_pt_code, future_expiry)
 
 
@@ -142,7 +142,7 @@ class TestPtOracle:
         price1 = pt_oracle.price_w()
         
         # Advance time by 1 hour
-        boa.env.evm.patch.timestamp += 3600
+        boa.env.timestamp += 3600
         
         # Second call should update
         price2 = pt_oracle.price_w()
@@ -167,7 +167,7 @@ def __init__(_expiry: uint256):
 """
         with boa.env.prank(deployer):
             # Set expiry to past
-            past_expiry = boa.env.evm.patch.timestamp - 1
+            past_expiry = boa.env.timestamp - 1
             expired_pt = boa.loads(mock_pt_code, past_expiry)
             
             # Create mock oracle
@@ -577,7 +577,7 @@ def price() -> uint256:
         
         with boa.env.prank(deployer):
             # Set expiry to exactly 1 year from now
-            one_year_later = boa.env.evm.patch.timestamp + (365 * 24 * 60 * 60)
+            one_year_later = boa.env.timestamp + (365 * 24 * 60 * 60)
             pt = boa.loads(mock_pt_code, one_year_later)
             mock_oracle = boa.loads(mock_oracle_code)
             
@@ -604,7 +604,7 @@ def price() -> uint256:
         # time_to_maturity = 0.5 years
         # discount = 0.5 * 0.5 = 0.25 (25%)
         # price = 1.0 * (1 - 0.25) = 0.75
-        boa.env.evm.patch.timestamp += (365 * 24 * 60 * 60) // 2  # Advance 6 months
+        boa.env.timestamp += (365 * 24 * 60 * 60) // 2  # Advance 6 months
         six_month_price = pt_oracle.price()
         assert six_month_price == 75 * 10**16, f"Expected 0.75e18, got {six_month_price}"
         
@@ -612,14 +612,14 @@ def price() -> uint256:
         # time_to_maturity ≈ 1/365 years ≈ 0.00274 years
         # discount = 0.5 * (1/365) ≈ 0.00137 (0.137%)
         # price ≈ 1.0 * (1 - 0.00137) ≈ 0.99863
-        boa.env.evm.patch.timestamp = one_year_later - (24 * 60 * 60)  # 1 day before expiry
+        boa.env.timestamp = one_year_later - (24 * 60 * 60)  # 1 day before expiry
         near_expiry_price = pt_oracle.price()
         # Allow small rounding error
         expected_near_expiry = 10**18 - (5 * 10**17 * 10**18 // (365 * 10**18))
         assert abs(near_expiry_price - expected_near_expiry) < 10**14, f"Near expiry price mismatch: {near_expiry_price}"
         
         # Test 4: At expiry (should return underlying price)
-        boa.env.evm.patch.timestamp = one_year_later
+        boa.env.timestamp = one_year_later
         expiry_price = pt_oracle.price()
         assert expiry_price == 10**18, f"Expected 1e18 at expiry, got {expiry_price}"
     
@@ -647,7 +647,7 @@ def price() -> uint256:
         
         with boa.env.prank(deployer):
             # Set expiry to 100 days from now for easier calculations
-            expiry_time = boa.env.evm.patch.timestamp + (100 * 24 * 60 * 60)
+            expiry_time = boa.env.timestamp + (100 * 24 * 60 * 60)
             pt = boa.loads(mock_pt_code, expiry_time)
             mock_oracle = boa.loads(mock_oracle_code)
             
@@ -671,7 +671,7 @@ def price() -> uint256:
         assert abs(price_100d - expected_100d) < 10**15, f"100 days: expected ~1.8e18, got {price_100d}"
         
         # Test at 50 days to maturity
-        boa.env.evm.patch.timestamp += (50 * 24 * 60 * 60)
+        boa.env.timestamp += (50 * 24 * 60 * 60)
         # discount = 0.365 * (50/365) = 0.05 (5%)
         # price = 2.0 * (1 - 0.05) = 1.9
         price_50d = pt_oracle.price()
@@ -679,7 +679,7 @@ def price() -> uint256:
         assert abs(price_50d - expected_50d) < 10**15, f"50 days: expected ~1.9e18, got {price_50d}"
         
         # Test at 10 days to maturity
-        boa.env.evm.patch.timestamp += (40 * 24 * 60 * 60)
+        boa.env.timestamp += (40 * 24 * 60 * 60)
         # discount = 0.365 * (10/365) = 0.01 (1%)
         # price = 2.0 * (1 - 0.01) = 1.98
         price_10d = pt_oracle.price()
@@ -710,7 +710,7 @@ def price() -> uint256:
         
         with boa.env.prank(deployer):
             # Set expiry to 1 year from now
-            one_year_later = boa.env.evm.patch.timestamp + (365 * 24 * 60 * 60)
+            one_year_later = boa.env.timestamp + (365 * 24 * 60 * 60)
             pt = boa.loads(mock_pt_code, one_year_later)
             mock_oracle = boa.loads(mock_oracle_code)
             
@@ -735,14 +735,14 @@ def price() -> uint256:
         # Test at 0.5 years to maturity
         # discount = 0.2 * 0.5 + 0.1 = 0.2 (20%)
         # price = 1.0 * (1 - 0.2) = 0.8
-        boa.env.evm.patch.timestamp += (365 * 24 * 60 * 60) // 2
+        boa.env.timestamp += (365 * 24 * 60 * 60) // 2
         six_month_price = pt_oracle.price()
         assert six_month_price == 8 * 10**17, f"Expected 0.8e18, got {six_month_price}"
         
         # Test very close to expiry
         # discount ≈ 0.2 * 0 + 0.1 = 0.1 (10%)
         # price ≈ 1.0 * (1 - 0.1) = 0.9
-        boa.env.evm.patch.timestamp = one_year_later - 3600  # 1 hour before expiry
+        boa.env.timestamp = one_year_later - 3600  # 1 hour before expiry
         near_expiry_price = pt_oracle.price()
         # Should be very close to 0.9 (just intercept discount)
         assert abs(near_expiry_price - 9 * 10**17) < 10**15, f"Near expiry price mismatch: {near_expiry_price}"
