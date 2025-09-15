@@ -60,10 +60,8 @@ last_discount_update: public(uint256)
 
 # Events
 event LinearDiscountUpdated:
-    old_slope: indexed(uint256)
-    old_intercept: indexed(uint256)
-    new_slope: uint256
-    new_intercept: uint256
+    new_slope: indexed(uint256)
+    new_intercept: indexed(uint256)
 
 
 event LimitsUpdated:
@@ -73,7 +71,6 @@ event LimitsUpdated:
 
 
 event PriceUpdated:
-    old_price: indexed(uint256)
     new_price: indexed(uint256)
     timestamp: uint256
 
@@ -202,17 +199,12 @@ def price_w() -> uint256:
 
     new_price: uint256 = self._calculate_price()
 
-    # Store old price for event
-    old_price: uint256 = self.last_price
-
     # Update price and timestamp
     self.last_price = new_price
     self.last_update = block.timestamp
 
     # Emit price update event
-    log PriceUpdated(
-        old_price=old_price, new_price=new_price, timestamp=block.timestamp
-    )
+    log PriceUpdated(new_price=new_price, timestamp=block.timestamp)
 
     return new_price
 
@@ -224,27 +216,23 @@ def _update_discount_params(_slope: uint256, _intercept: uint256):
     assert _slope <= DISCOUNT_PRECISION, "slope exceeds precision"
     assert _intercept <= DISCOUNT_PRECISION, "intercept exceeds precision"
 
-    # Store old values for event and limit checks
-    old_slope: uint256 = self.slope
-    old_intercept: uint256 = self.intercept
-
     # Check slope change limit (0 means no limit)
     if self.max_slope_change > 0:
         slope_change: uint256 = 0
-        if _slope > old_slope:
-            slope_change = _slope - old_slope
+        if _slope > self.slope:
+            slope_change = _slope - self.slope
         else:
-            slope_change = old_slope - _slope
+            slope_change = self.slope - _slope
         assert (
             slope_change <= self.max_slope_change
         ), "slope change exceeds limit"
 
     if self.max_intercept_change > 0:
         intercept_change: uint256 = 0
-        if _intercept > old_intercept:
-            intercept_change = _intercept - old_intercept
+        if _intercept > self.intercept:
+            intercept_change = _intercept - self.intercept
         else:
-            intercept_change = old_intercept - _intercept
+            intercept_change = self.intercept - _intercept
         assert (
             intercept_change <= self.max_intercept_change
         ), "intercept change exceeds limit"
@@ -269,8 +257,6 @@ def _update_discount_params(_slope: uint256, _intercept: uint256):
     self.last_discount_update = block.timestamp
 
     log LinearDiscountUpdated(
-        old_slope=old_slope,
-        old_intercept=old_intercept,
         new_slope=_slope,
         new_intercept=_intercept,
     )
