@@ -72,7 +72,6 @@ event LimitsUpdated:
 
 event PriceUpdated:
     new_price: indexed(uint256)
-    timestamp: uint256
 
 
 event OracleInitialized:
@@ -204,7 +203,7 @@ def price_w() -> uint256:
     self.last_update = block.timestamp
 
     # Emit price update event
-    log PriceUpdated(new_price=new_price, timestamp=block.timestamp)
+    log PriceUpdated(new_price=new_price)
 
     return new_price
 
