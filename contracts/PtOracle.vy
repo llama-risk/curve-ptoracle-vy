@@ -15,7 +15,7 @@ from pcaversaccio.snekmate.src.snekmate.auth import access_control
 
 initializes: access_control
 
-exports: access_control.__interface__
+exports: (access_control.IERC165, access_control.IAccessControl)
 
 # Interface for Principal Token example pt token: 0x6d98a2b6cdbf44939362a3e99793339ba2016af4
 interface IPendlePT:
