@@ -48,9 +48,6 @@ max_intercept_change: public(
     uint256
 )  # Maximum allowed change in intercept per update
 
-# Note: Access control is now handled by snekmate's access_control module
-
-
 # Price storage
 last_update: public(uint256)
 last_price: public(uint256)
@@ -79,9 +76,6 @@ event OracleInitialized:
     underlying_oracle: indexed(IOracle)
     initial_slope: uint256
     initial_intercept: uint256
-
-
-# Manager updates are now handled through AccessControl's RoleGranted/RoleRevoked events
 
 
 # Constructor
