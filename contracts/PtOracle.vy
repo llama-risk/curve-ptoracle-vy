@@ -35,7 +35,7 @@ MANAGER_ROLE: public(constant(bytes32)) = keccak256("MANAGER_ROLE")
 ADMIN_ROLE: public(constant(bytes32)) = keccak256("ADMIN_ROLE")
 
 # State variables
-pt: public(address)
+pt: public(IPendlePT)
 underlying_oracle: public(IOracle)
 slope: public(uint256)  # Linear discount slope with 1e18 precision
 intercept: public(uint256)  # Linear discount intercept with 1e18 precision
@@ -72,7 +72,7 @@ event PriceUpdated:
 
 
 event OracleInitialized:
-    pt: indexed(address)
+    pt: indexed(IPendlePT)
     underlying_oracle: indexed(IOracle)
     initial_slope: uint256
     initial_intercept: uint256
@@ -81,7 +81,7 @@ event OracleInitialized:
 # Constructor
 @deploy
 def __init__(
-    _pt: address,
+    _pt: IPendlePT,
     _underlying_oracle: IOracle,
     _slope: uint256,
     _intercept: uint256,
@@ -90,7 +90,7 @@ def __init__(
     _admin: address,
 ):
     # Validate all addresses are non-zero
-    assert _pt != empty(address), "invalid PT address"
+    assert _pt != empty(IPendlePT), "invalid PT address"
     assert _underlying_oracle != empty(IOracle), "invalid oracle address"
     assert _manager != empty(address), "invalid manager address"
     assert _admin != empty(address), "invalid admin address"
@@ -126,7 +126,7 @@ def __init__(
     self.last_discount_update = (
         block.timestamp
     )  # Initialize discount update timestamp
-    pt_expiry = staticcall IPendlePT(_pt).expiry()
+    pt_expiry = staticcall _pt.expiry()
 
     # Initialize price
     self.last_price = self._calculate_price()
