@@ -29,6 +29,7 @@ interface IOracle:
 
 # Constants
 DISCOUNT_PRECISION: constant(uint256) = 10**18
+SECONDS_PER_YEAR: constant(uint256) = 365 * 24 * 60 * 60  # 31,536,000 seconds
 
 # Role constants
 MANAGER_ROLE: public(constant(bytes32)) = keccak256("MANAGER_ROLE")
@@ -154,8 +155,6 @@ def _calculate_price() -> uint256:
     time_to_maturity_seconds: uint256 = pt_expiry - block.timestamp
 
     # Convert time to maturity to years with 1e18 precision
-    # 1 year = 365 * 24 * 60 * 60 = 31,536,000 seconds
-    SECONDS_PER_YEAR: uint256 = 365 * 24 * 60 * 60
     time_to_maturity_years: uint256 = (
         time_to_maturity_seconds * DISCOUNT_PRECISION
     ) // SECONDS_PER_YEAR
@@ -233,8 +232,6 @@ def _update_discount_params(_slope: uint256, _intercept: uint256):
     time_to_maturity_seconds: uint256 = pt_expiry - block.timestamp
 
     # Convert time to maturity to years with 1e18 precision
-    # 1 year = 365 * 24 * 60 * 60 = 31,536,000 seconds
-    SECONDS_PER_YEAR: uint256 = 365 * 24 * 60 * 60
     time_to_maturity_years: uint256 = (
         time_to_maturity_seconds * DISCOUNT_PRECISION
     ) // SECONDS_PER_YEAR
