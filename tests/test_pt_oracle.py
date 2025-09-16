@@ -82,7 +82,7 @@ def pt_oracle(deployer, manager, admin, mock_pt, mock_oracle):
             mock_oracle.address,  # underlying oracle
             5 * 10**16,  # slope (5% per year with 1e18 precision)
             0,   # intercept (0% with 1e18 precision)
-            86400,  # max_update_interval (24 hours)
+            86400,  # min_update_interval (24 hours)
             manager,
             admin
         )
@@ -100,7 +100,7 @@ class TestPtOracle:
         assert pt_oracle.underlying_oracle() == mock_oracle.address
         assert pt_oracle.slope() == 5 * 10**16  # 5% per year
         assert pt_oracle.intercept() == 0
-        assert pt_oracle.max_update_interval() == 86400
+        assert pt_oracle.min_update_interval() == 86400
     
     def test_price_calculation(self, pt_oracle, mock_oracle):
         """Test that price() calculates the correct discounted price"""
@@ -234,19 +234,19 @@ def price() -> uint256:
         with boa.reverts("update interval not elapsed"):
             pt_oracle.set_linear_discount(300, 150, sender=manager)
         
-        # Advance time by less than max_update_interval
+        # Advance time by less than min_update_interval
         boa.env.timestamp = boa.env.timestamp + 43200  # 12 hours
         
         # Should still fail
         with boa.reverts("update interval not elapsed"):
             pt_oracle.set_linear_discount(300, 150, sender=manager)
         
-        # Advance time to exactly max_update_interval (should still fail with > operator)
+        # Advance time to exactly min_update_interval (should still fail with > operator)
         boa.env.timestamp = first_update + 86400  # Exactly 24 hours from last update
         with boa.reverts("update interval not elapsed"):
             pt_oracle.set_linear_discount(300, 150, sender=manager)
         
-        # Advance time to max_update_interval + 1 second (should work with > operator)
+        # Advance time to min_update_interval + 1 second (should work with > operator)
         boa.env.timestamp = first_update + 86401  # 24 hours + 1 second
         pt_oracle.set_linear_discount(300, 150, sender=manager)
         assert pt_oracle.slope() == 300
@@ -256,7 +256,7 @@ def price() -> uint256:
     def test_set_limits(self, pt_oracle, admin, deployer):
         """Test that admin can update max update interval and change limits"""
         pt_oracle.set_limits(172800, 2 * 10**16, 3 * 10**16, sender=admin)  # 48 hours, 2% slope change, 3% intercept change
-        assert pt_oracle.max_update_interval() == 172800
+        assert pt_oracle.min_update_interval() == 172800
         assert pt_oracle.max_slope_change() == 2 * 10**16
         assert pt_oracle.max_intercept_change() == 3 * 10**16
         
@@ -401,12 +401,12 @@ def price() -> uint256:
         pt_oracle.set_linear_discount(100, 50, sender=manager)
         update_time = pt_oracle.last_discount_update()
         
-        # At exactly max_update_interval, should fail (tests > operator)
+        # At exactly min_update_interval, should fail (tests > operator)
         boa.env.timestamp = update_time + 86400
         with boa.reverts("update interval not elapsed"):
             pt_oracle.set_linear_discount(200, 100, sender=manager)
         
-        # At max_update_interval + 1, should succeed
+        # At min_update_interval + 1, should succeed
         boa.env.timestamp = update_time + 86401
         pt_oracle.set_linear_discount(200, 100, sender=manager)
         assert pt_oracle.slope() == 200
@@ -425,7 +425,7 @@ def price() -> uint256:
         
         # Test very high but valid max update interval
         pt_oracle.set_limits(10**8, 0, 0, sender=admin)  # Very high but should work, no limits on changes
-        assert pt_oracle.max_update_interval() == 10**8
+        assert pt_oracle.min_update_interval() == 10**8
     
     def test_events_include_old_and_new_values(self, pt_oracle, manager, admin):
         """Test that events emit both old and new values"""
@@ -443,9 +443,9 @@ def price() -> uint256:
         assert pt_oracle.intercept() == 250
         
         # Test LimitsUpdated event
-        old_interval = pt_oracle.max_update_interval()
+        old_interval = pt_oracle.min_update_interval()
         pt_oracle.set_limits(172800, 5 * 10**16, 3 * 10**16, sender=admin)
-        assert pt_oracle.max_update_interval() == 172800
+        assert pt_oracle.min_update_interval() == 172800
         assert pt_oracle.max_slope_change() == 5 * 10**16
         assert pt_oracle.max_intercept_change() == 3 * 10**16
     
@@ -584,7 +584,7 @@ def price() -> uint256:
                 mock_oracle.address,
                 5 * 10**17,  # slope = 0.5 (50% per year)
                 0,           # intercept = 0
-                86400,       # max_update_interval
+                86400,       # min_update_interval
                 manager,
                 admin
             )

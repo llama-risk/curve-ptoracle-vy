@@ -36,7 +36,7 @@ pt: public(IPendlePT)
 underlying_oracle: public(IOracle)
 slope: public(uint256)  # Linear discount slope with 1e18 precision
 intercept: public(uint256)  # Linear discount intercept with 1e18 precision
-max_update_interval: public(uint256)
+min_update_interval: public(uint256)
 pt_expiry: public(immutable(uint256))
 
 # Limit variables for slope and intercept changes (0 = no limit)
@@ -59,7 +59,7 @@ event LinearDiscountUpdated:
 
 
 event LimitsUpdated:
-    new_max_update_interval: uint256
+    new_min_update_interval: uint256
     new_max_slope_change: uint256
     new_max_intercept_change: uint256
 
@@ -80,7 +80,7 @@ def __init__(
     _underlying_oracle: IOracle,
     _slope: uint256,
     _intercept: uint256,
-    _max_update_interval: uint256,
+    _min_update_interval: uint256,
     _manager: address,
     _admin: address,
 ):
@@ -113,9 +113,13 @@ def __init__(
     self.underlying_oracle = _underlying_oracle
     self.slope = _slope
     self.intercept = _intercept
-    self.max_update_interval = _max_update_interval
-    self.max_slope_change = 0  # Initialize to 0 (no limit)
-    self.max_intercept_change = 0  # Initialize to 0 (no limit)
+    self.min_update_interval = _min_update_interval
+    self.max_slope_change = max_value(
+        uint256
+    )  # Initialize to max value (no limit)
+    self.max_intercept_change = max_value(
+        uint256
+    )  # Initialize to max value (no limit)
     self.last_update = block.timestamp
     self.last_discount_update = (
         block.timestamp
@@ -205,26 +209,22 @@ def _update_discount_params(_slope: uint256, _intercept: uint256):
     assert _slope <= DISCOUNT_PRECISION, "slope exceeds precision"
     assert _intercept <= DISCOUNT_PRECISION, "intercept exceeds precision"
 
-    # Check slope change limit (0 means no limit)
-    if self.max_slope_change > 0:
-        slope_change: uint256 = 0
-        if _slope > self.slope:
-            slope_change = _slope - self.slope
-        else:
-            slope_change = self.slope - _slope
-        assert (
-            slope_change <= self.max_slope_change
-        ), "slope change exceeds limit"
+    # Check slope change limit
+    slope_change: uint256 = 0
+    if _slope > self.slope:
+        slope_change = _slope - self.slope
+    else:
+        slope_change = self.slope - _slope
+    assert (slope_change <= self.max_slope_change), "slope change exceeds limit"
 
-    if self.max_intercept_change > 0:
-        intercept_change: uint256 = 0
-        if _intercept > self.intercept:
-            intercept_change = _intercept - self.intercept
-        else:
-            intercept_change = self.intercept - _intercept
-        assert (
-            intercept_change <= self.max_intercept_change
-        ), "intercept change exceeds limit"
+    intercept_change: uint256 = 0
+    if _intercept > self.intercept:
+        intercept_change = _intercept - self.intercept
+    else:
+        intercept_change = self.intercept - _intercept
+    assert (
+        intercept_change <= self.max_intercept_change
+    ), "intercept change exceeds limit"
 
     time_to_maturity_seconds: uint256 = pt_expiry - block.timestamp
 
@@ -255,9 +255,9 @@ def _update_discount_params(_slope: uint256, _intercept: uint256):
 def set_linear_discount(_slope: uint256, _intercept: uint256):
     access_control._check_role(MANAGER_ROLE, msg.sender)
 
-    # Check rate limiting - Manager can only update once per max_update_interval
+    # Check rate limiting - Manager can only update once per min_update_interval
     assert (
-        block.timestamp > self.last_discount_update + self.max_update_interval
+        block.timestamp > self.last_discount_update + self.min_update_interval
     ), "update interval not elapsed"
 
     self._update_discount_params(_slope, _intercept)
@@ -272,9 +272,9 @@ def set_slope_from_apy(expected_apy: uint256):
     """
     access_control._check_role(MANAGER_ROLE, msg.sender)
 
-    # Check rate limiting - Manager can only update once per max_update_interval
+    # Check rate limiting - Manager can only update once per min_update_interval
     assert (
-        block.timestamp > self.last_discount_update + self.max_update_interval
+        block.timestamp > self.last_discount_update + self.min_update_interval
     ), "update interval not elapsed"
 
     # Validate APY is within reasonable bounds (e.g., max 1000% APY)
@@ -302,18 +302,18 @@ def set_slope_from_apy(expected_apy: uint256):
 @external
 @nonpayable
 def set_limits(
-    _max_update_interval: uint256,
+    _min_update_interval: uint256,
     _max_slope_change: uint256,
     _max_intercept_change: uint256,
 ):
     access_control._check_role(ADMIN_ROLE, msg.sender)
 
-    self.max_update_interval = _max_update_interval
+    self.min_update_interval = _min_update_interval
     self.max_slope_change = _max_slope_change
     self.max_intercept_change = _max_intercept_change
 
     log LimitsUpdated(
-        new_max_update_interval=_max_update_interval,
+        new_min_update_interval=_min_update_interval,
         new_max_slope_change=_max_slope_change,
         new_max_intercept_change=_max_intercept_change,
     )
