@@ -7,10 +7,6 @@ from ethereum.ercs import IERC165
 
 implements: IERC165
 
-from pcaversaccio.snekmate.src.snekmate.auth.interfaces import IAccessControl
-
-implements: IAccessControl
-
 from pcaversaccio.snekmate.src.snekmate.auth import access_control
 
 initializes: access_control
@@ -75,8 +71,6 @@ event PriceUpdated:
 event OracleInitialized:
     pt: indexed(IPendlePT)
     underlying_oracle: indexed(IOracle)
-    initial_slope: uint256
-    initial_intercept: uint256
 
 
 # Constructor
@@ -101,7 +95,6 @@ def __init__(
     assert (
         _intercept <= DISCOUNT_PRECISION
     ), "initial intercept exceeds precision"
-    assert _max_update_interval > 0, "invalid update interval"
 
     # Initialize access control (msg.sender becomes default admin)
     access_control.__init__()
@@ -133,11 +126,15 @@ def __init__(
     self.last_price = self._calculate_price()
 
     # Emit initialization event
-    log OracleInitialized(
-        pt=_pt,
-        underlying_oracle=_underlying_oracle,
-        initial_slope=_slope,
-        initial_intercept=_intercept,
+    log OracleInitialized(pt=_pt, underlying_oracle=_underlying_oracle)
+
+    log LinearDiscountUpdated(
+        new_slope=_slope,
+        new_intercept=_intercept,
+    )
+
+    log PriceUpdated(
+        new_price=self.last_price,
     )
 
 
@@ -294,9 +291,6 @@ def set_slope_from_apy(expected_apy: uint256):
     # discount_rate = APY / (1 + APY)
     numerator: uint256 = expected_apy * DISCOUNT_PRECISION
     denominator: uint256 = DISCOUNT_PRECISION + expected_apy
-
-    # Ensure denominator won't cause division by zero
-    assert denominator > 0, "invalid denominator"
 
     # Calculate slope (discount per year with 1e18 precision)
     new_slope: uint256 = numerator // denominator
