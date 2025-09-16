@@ -29,6 +29,9 @@ SECONDS_PER_YEAR: constant(uint256) = 365 * 24 * 60 * 60  # 31,536,000 seconds
 
 # Role constants
 MANAGER_ROLE: public(constant(bytes32)) = keccak256("MANAGER_ROLE")
+PARAMETER_ADMIN_ROLE: public(constant(bytes32)) = keccak256(
+    "PARAMETER_ADMIN_ROLE"
+)
 ADMIN_ROLE: public(constant(bytes32)) = keccak256("ADMIN_ROLE")
 
 # State variables
@@ -82,12 +85,14 @@ def __init__(
     _intercept: uint256,
     _min_update_interval: uint256,
     _manager: address,
+    _parameter_admin: address,
     _admin: address,
 ):
     # Validate all addresses are non-zero
     assert _pt != empty(IPendlePT), "invalid PT address"
     assert _underlying_oracle != empty(IOracle), "invalid oracle address"
     assert _manager != empty(address), "invalid manager address"
+    assert _parameter_admin != empty(address), "invalid parameter admin address"
     assert _admin != empty(address), "invalid admin address"
 
     # Validate initial parameters
@@ -99,11 +104,13 @@ def __init__(
     # Initialize access control (msg.sender becomes default admin)
     access_control.__init__()
 
-    # Set ADMIN_ROLE as the admin for MANAGER_ROLE
+    # Set ADMIN_ROLE as the admin for MANAGER_ROLE and PARAMETER_ADMIN_ROLE
     access_control._set_role_admin(MANAGER_ROLE, ADMIN_ROLE)
+    access_control._set_role_admin(PARAMETER_ADMIN_ROLE, ADMIN_ROLE)
 
     # Grant roles
     access_control._grant_role(MANAGER_ROLE, _manager)
+    access_control._grant_role(PARAMETER_ADMIN_ROLE, _parameter_admin)
     access_control._grant_role(ADMIN_ROLE, _admin)
 
     # Revoke default admin role from deployer
@@ -298,7 +305,7 @@ def set_slope_from_apy(expected_apy: uint256):
     self._update_discount_params(new_slope, 0)
 
 
-# Write functions - Admin only
+# Write functions - Parameter Admin only
 @external
 @nonpayable
 def set_limits(
@@ -306,7 +313,7 @@ def set_limits(
     _max_slope_change: uint256,
     _max_intercept_change: uint256,
 ):
-    access_control._check_role(ADMIN_ROLE, msg.sender)
+    access_control._check_role(PARAMETER_ADMIN_ROLE, msg.sender)
 
     self.min_update_interval = _min_update_interval
     self.max_slope_change = _max_slope_change

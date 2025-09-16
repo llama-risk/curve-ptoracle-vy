@@ -17,6 +17,9 @@ def manager():
 def non_manager():
     return boa.env.generate_address()
 
+@pytest.fixture
+def parameter_admin():
+    return boa.env.generate_address()
 
 @pytest.fixture
 def admin():
@@ -70,10 +73,10 @@ def set_price(_price: uint256):
 
 
 @pytest.fixture
-def pt_oracle(deployer, manager, admin, mock_pt, mock_oracle):
+def pt_oracle(deployer, manager, parameter_admin, admin, mock_pt, mock_oracle):
     """Deploy the PtOracle contract"""
     from contracts import PtOracle
-    
+
     with boa.env.prank(deployer):
         # Slope is now in years with 1e18 precision
         # For a 5% APY: slope = 0.05 * 1e18 = 5e16
@@ -84,17 +87,20 @@ def pt_oracle(deployer, manager, admin, mock_pt, mock_oracle):
             0,   # intercept (0% with 1e18 precision)
             86400,  # min_update_interval (24 hours)
             manager,
+            parameter_admin,
             admin
         )
 
 
 class TestPtOracle:
-    def test_deployment(self, pt_oracle, manager, admin, mock_pt, mock_oracle):
+    def test_deployment(self, pt_oracle, manager, parameter_admin, admin, mock_pt, mock_oracle):
         """Test that the contract deploys correctly with initial values"""
-        # Check that manager has MANAGER_ROLE
+        # Check that all roles are assigned correctly
         MANAGER_ROLE = pt_oracle.MANAGER_ROLE()
+        PARAMETER_ADMIN_ROLE = pt_oracle.PARAMETER_ADMIN_ROLE()
         ADMIN_ROLE = pt_oracle.ADMIN_ROLE()
         assert pt_oracle.hasRole(MANAGER_ROLE, manager)
+        assert pt_oracle.hasRole(PARAMETER_ADMIN_ROLE, parameter_admin)
         assert pt_oracle.hasRole(ADMIN_ROLE, admin)
         assert pt_oracle.pt() == mock_pt.address
         assert pt_oracle.underlying_oracle() == mock_oracle.address
@@ -187,6 +193,7 @@ def price() -> uint256:
                 mock_oracle.address,
                 1, 0, 86400,
                 boa.env.generate_address(),
+                boa.env.generate_address(),
                 boa.env.generate_address()
             )
             
@@ -253,13 +260,17 @@ def price() -> uint256:
         assert pt_oracle.intercept() == 150
         assert pt_oracle.last_discount_update() > first_update
     
-    def test_set_limits(self, pt_oracle, admin, deployer):
-        """Test that admin can update max update interval and change limits"""
-        pt_oracle.set_limits(172800, 2 * 10**16, 3 * 10**16, sender=admin)  # 48 hours, 2% slope change, 3% intercept change
+    def test_set_limits(self, pt_oracle, parameter_admin, admin, deployer):
+        """Test that parameter_admin can update max update interval and change limits"""
+        pt_oracle.set_limits(172800, 2 * 10**16, 3 * 10**16, sender=parameter_admin)  # 48 hours, 2% slope change, 3% intercept change
         assert pt_oracle.min_update_interval() == 172800
         assert pt_oracle.max_slope_change() == 2 * 10**16
         assert pt_oracle.max_intercept_change() == 3 * 10**16
-        
+
+        # Admin should NOT be able to call set_limits (only parameter_admin)
+        with boa.reverts():
+            pt_oracle.set_limits(86400, 10**16, 10**16, sender=admin)
+
         # Non-admin should fail
         with boa.reverts():
             pt_oracle.set_limits(86400, 10**16, 10**16, sender=deployer)
@@ -302,6 +313,7 @@ def price() -> uint256:
                 0,  # No slope needed
                 10**18,  # Max intercept = 100% discount
                 86400,
+                boa.env.generate_address(),
                 boa.env.generate_address(),
                 boa.env.generate_address()
             )
@@ -384,6 +396,7 @@ def price() -> uint256:
                 9 * 10**17,  # 90% intercept (0.9 * 10**18)
                 86400,
                 boa.env.generate_address(),
+                boa.env.generate_address(),
                 boa.env.generate_address()
             )
         assert pt_oracle.intercept() == 9 * 10**17
@@ -412,7 +425,7 @@ def price() -> uint256:
         assert pt_oracle.slope() == 200
         assert pt_oracle.intercept() == 100
     
-    def test_slope_and_intercept_boundaries(self, pt_oracle, manager, admin):
+    def test_slope_and_intercept_boundaries(self, pt_oracle, manager, parameter_admin):
         """Test boundary assertions for slope and intercept"""
         # Test that intercept cannot exceed DISCOUNT_PRECISION
         boa.env.timestamp = boa.env.timestamp + 86401
@@ -424,10 +437,10 @@ def price() -> uint256:
             pt_oracle.set_linear_discount(10**18 + 1, 1000, sender=manager)
         
         # Test very high but valid max update interval
-        pt_oracle.set_limits(10**8, 0, 0, sender=admin)  # Very high but should work, no limits on changes
+        pt_oracle.set_limits(10**8, 0, 0, sender=parameter_admin)  # Very high but should work, no limits on changes
         assert pt_oracle.min_update_interval() == 10**8
     
-    def test_events_include_old_and_new_values(self, pt_oracle, manager, admin):
+    def test_events_include_old_and_new_values(self, pt_oracle, manager, parameter_admin):
         """Test that events emit both old and new values"""
         # Advance time for rate limiting
         boa.env.timestamp = boa.env.timestamp + 86401
@@ -444,7 +457,7 @@ def price() -> uint256:
         
         # Test LimitsUpdated event
         old_interval = pt_oracle.min_update_interval()
-        pt_oracle.set_limits(172800, 5 * 10**16, 3 * 10**16, sender=admin)
+        pt_oracle.set_limits(172800, 5 * 10**16, 3 * 10**16, sender=parameter_admin)
         assert pt_oracle.min_update_interval() == 172800
         assert pt_oracle.max_slope_change() == 5 * 10**16
         assert pt_oracle.max_intercept_change() == 3 * 10**16
@@ -498,7 +511,7 @@ def price() -> uint256:
         with boa.reverts():
             pt_oracle.set_linear_discount(100, 50, sender=manager)
     
-    def test_role_based_access_control(self, pt_oracle, admin, manager):
+    def test_role_based_access_control(self, pt_oracle, admin, parameter_admin, manager):
         """Test comprehensive role-based access control"""
         unauthorized = boa.env.generate_address()
         
@@ -510,9 +523,9 @@ def price() -> uint256:
         with boa.reverts():
             pt_oracle.set_linear_discount(200, 100, sender=unauthorized)
         
-        # Test admin functions
-        pt_oracle.set_limits(100000, 0, 0, sender=admin)  # Should work
-        
+        # Test parameter_admin functions
+        pt_oracle.set_limits(100000, 0, 0, sender=parameter_admin)  # Should work
+
         with boa.reverts():
             pt_oracle.set_limits(200000, 0, 0, sender=unauthorized)
         
@@ -547,7 +560,7 @@ def price() -> uint256:
         assert pt_oracle.pt_expiry() == mock_pt.expiry()
     
     # Time-based discount model tests
-    def test_discount_model_with_time_jumps(self, deployer, manager, admin):
+    def test_discount_model_with_time_jumps(self, deployer, manager, parameter_admin, admin):
         """Test discount model with 50% slope and time progression"""
         from contracts import PtOracle
         
@@ -586,6 +599,7 @@ def price() -> uint256:
                 0,           # intercept = 0
                 86400,       # min_update_interval
                 manager,
+                parameter_admin,
                 admin
             )
         
@@ -619,7 +633,7 @@ def price() -> uint256:
         expiry_price = pt_oracle.price()
         assert expiry_price == 10**18, f"Expected 1e18 at expiry, got {expiry_price}"
     
-    def test_linear_discount_progression(self, deployer, manager, admin):
+    def test_linear_discount_progression(self, deployer, manager, parameter_admin, admin):
         """Test that discount decreases linearly as time to maturity decreases"""
         from contracts import PtOracle
         
@@ -656,6 +670,7 @@ def price() -> uint256:
                 0,             # intercept = 0
                 86400,
                 manager,
+                parameter_admin,
                 admin
             )
         
@@ -682,7 +697,7 @@ def price() -> uint256:
         expected_10d = 198 * 10**16
         assert abs(price_10d - expected_10d) < 10**15, f"10 days: expected ~1.98e18, got {price_10d}"
     
-    def test_discount_with_intercept(self, deployer, manager, admin):
+    def test_discount_with_intercept(self, deployer, manager, parameter_admin, admin):
         """Test discount model with both slope and intercept"""
         from contracts import PtOracle
         
@@ -719,6 +734,7 @@ def price() -> uint256:
                 10**17,      # intercept = 0.1 (10%)
                 86400,
                 manager,
+                parameter_admin,
                 admin
             )
         
@@ -744,10 +760,10 @@ def price() -> uint256:
         assert abs(near_expiry_price - 9 * 10**17) < 10**15, f"Near expiry price mismatch: {near_expiry_price}"
     
     # Tests for slope and intercept change limits
-    def test_slope_change_limit_enforced(self, pt_oracle, manager, admin):
+    def test_slope_change_limit_enforced(self, pt_oracle, manager, parameter_admin):
         """Test that slope changes are limited when max_slope_change is set"""
         # Set a 2% max slope change limit
-        pt_oracle.set_limits(86400, 2 * 10**16, 0, sender=admin)
+        pt_oracle.set_limits(86400, 2 * 10**16, 0, sender=parameter_admin)
         
         # Advance time to allow update
         boa.env.timestamp = boa.env.timestamp + 86401
@@ -765,14 +781,14 @@ def price() -> uint256:
         pt_oracle.set_linear_discount(5 * 10**16, 0, sender=manager)
         assert pt_oracle.slope() == 5 * 10**16
     
-    def test_intercept_change_limit_enforced(self, pt_oracle, manager, admin):
+    def test_intercept_change_limit_enforced(self, pt_oracle, manager, parameter_admin):
         """Test that intercept changes are limited when max_intercept_change is set"""
         # First set an initial intercept
         boa.env.timestamp = boa.env.timestamp + 86401
         pt_oracle.set_linear_discount(5 * 10**16, 3 * 10**16, sender=manager)
         
-        # Set a 1.5% max intercept change limit  
-        pt_oracle.set_limits(86400, 0, 15 * 10**15, sender=admin)
+        # Set a 1.5% max intercept change limit
+        pt_oracle.set_limits(86400, 0, 15 * 10**15, sender=parameter_admin)
         
         # Advance time to allow update
         boa.env.timestamp = boa.env.timestamp + 86401
@@ -785,7 +801,7 @@ def price() -> uint256:
         pt_oracle.set_linear_discount(5 * 10**16, 4 * 10**16, sender=manager)
         assert pt_oracle.intercept() == 4 * 10**16
     
-    def test_zero_limit_means_no_restriction(self, deployer, manager, admin):
+    def test_zero_limit_means_no_restriction(self, deployer, manager, parameter_admin, admin):
         """Test that setting max change to 0 means no limit"""
         from contracts import PtOracle
         
@@ -819,6 +835,7 @@ def price() -> uint256:
                 10**16,      # 1% intercept
                 86400,
                 manager,
+                parameter_admin,
                 admin
             )
         
@@ -830,10 +847,10 @@ def price() -> uint256:
         assert pt_oracle.slope() == 90 * 10**16
         assert pt_oracle.intercept() == 80 * 10**16
     
-    def test_both_limits_work_together(self, pt_oracle, manager, admin):
+    def test_both_limits_work_together(self, pt_oracle, manager, parameter_admin):
         """Test that both slope and intercept limits are enforced together"""
         # Set limits: 1% max slope change, 2% max intercept change
-        pt_oracle.set_limits(86400, 10**16, 2 * 10**16, sender=admin)
+        pt_oracle.set_limits(86400, 10**16, 2 * 10**16, sender=parameter_admin)
         
         # Advance time
         boa.env.timestamp = boa.env.timestamp + 86401
@@ -851,10 +868,10 @@ def price() -> uint256:
         assert pt_oracle.slope() == 55 * 10**15
         assert pt_oracle.intercept() == 15 * 10**15
     
-    def test_admin_can_update_limits(self, pt_oracle, admin, manager):
-        """Test that admin can update limits at any time"""
+    def test_parameter_admin_can_update_limits(self, pt_oracle, parameter_admin, manager):
+        """Test that parameter_admin can update limits at any time"""
         # Initially set strict limits
-        pt_oracle.set_limits(86400, 5 * 10**15, 5 * 10**15, sender=admin)  # 0.5% limits
+        pt_oracle.set_limits(86400, 5 * 10**15, 5 * 10**15, sender=parameter_admin)  # 0.5% limits
         
         # Advance time
         boa.env.timestamp = boa.env.timestamp + 86401
@@ -863,18 +880,18 @@ def price() -> uint256:
         with boa.reverts("slope change exceeds limit"):
             pt_oracle.set_linear_discount(10 * 10**16, 0, sender=manager)
         
-        # Admin relaxes limits
-        pt_oracle.set_limits(86400, 10 * 10**16, 10 * 10**16, sender=admin)  # 10% limits
+        # Parameter admin relaxes limits
+        pt_oracle.set_limits(86400, 10 * 10**16, 10 * 10**16, sender=parameter_admin)  # 10% limits
         
         # Now manager can make larger changes
         pt_oracle.set_linear_discount(10 * 10**16, 5 * 10**16, sender=manager)
         assert pt_oracle.slope() == 10 * 10**16
         assert pt_oracle.intercept() == 5 * 10**16
     
-    def test_set_slope_from_apy_respects_limit(self, pt_oracle, manager, admin):
+    def test_set_slope_from_apy_respects_limit(self, pt_oracle, manager, parameter_admin):
         """Test that set_slope_from_apy also respects slope change limits"""
         # Set a 2% max slope change limit
-        pt_oracle.set_limits(86400, 2 * 10**16, 10**16, sender=admin)
+        pt_oracle.set_limits(86400, 2 * 10**16, 10**16, sender=parameter_admin)
         
         # Advance time
         boa.env.timestamp = boa.env.timestamp + 86401
@@ -892,3 +909,38 @@ def price() -> uint256:
         assert pt_oracle.slope() > 5 * 10**16
         assert pt_oracle.slope() < 7 * 10**16
         assert pt_oracle.intercept() == 0
+
+    def test_admin_can_grant_parameter_admin_role(self, pt_oracle, admin, parameter_admin):
+        """Test that admin can grant and revoke parameter_admin role"""
+        new_param_admin = boa.env.generate_address()
+        PARAMETER_ADMIN_ROLE = pt_oracle.PARAMETER_ADMIN_ROLE()
+
+        # Admin should be able to grant parameter_admin role
+        pt_oracle.grantRole(PARAMETER_ADMIN_ROLE, new_param_admin, sender=admin)
+        assert pt_oracle.hasRole(PARAMETER_ADMIN_ROLE, new_param_admin)
+
+        # New parameter_admin should be able to set limits
+        pt_oracle.set_limits(200000, 10**17, 10**17, sender=new_param_admin)
+        assert pt_oracle.min_update_interval() == 200000
+
+        # Admin can revoke parameter_admin role
+        pt_oracle.revokeRole(PARAMETER_ADMIN_ROLE, new_param_admin, sender=admin)
+        assert not pt_oracle.hasRole(PARAMETER_ADMIN_ROLE, new_param_admin)
+
+        # Revoked parameter_admin should no longer be able to set limits
+        with boa.reverts():
+            pt_oracle.set_limits(300000, 10**17, 10**17, sender=new_param_admin)
+
+    def test_parameter_admin_cannot_grant_roles(self, pt_oracle, parameter_admin):
+        """Test that parameter_admin cannot grant any roles"""
+        new_user = boa.env.generate_address()
+        MANAGER_ROLE = pt_oracle.MANAGER_ROLE()
+        PARAMETER_ADMIN_ROLE = pt_oracle.PARAMETER_ADMIN_ROLE()
+
+        # Parameter admin should not be able to grant manager role
+        with boa.reverts():
+            pt_oracle.grantRole(MANAGER_ROLE, new_user, sender=parameter_admin)
+
+        # Parameter admin should not be able to grant parameter_admin role
+        with boa.reverts():
+            pt_oracle.grantRole(PARAMETER_ADMIN_ROLE, new_user, sender=parameter_admin)
