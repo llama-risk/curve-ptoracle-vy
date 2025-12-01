@@ -240,11 +240,12 @@ def _update_discount_params(_slope: uint256, _intercept: uint256):
         time_to_maturity_seconds * DISCOUNT_PRECISION
     ) // SECONDS_PER_YEAR
 
-    # Linear discount with 1e18 precision: discount = (slope * time_to_maturity_years) / 1e18 + intercept
-    discount: uint256 = (
-        self.slope * time_to_maturity_years
-    ) // DISCOUNT_PRECISION + self.intercept
-    assert discount <= DISCOUNT_PRECISION, "discount exceeds precision"
+    # Validate proposed discount using new values (_slope, _intercept)
+    # This prevents setting parameters that would cause _calculate_price() to revert
+    new_discount: uint256 = (
+        _slope * time_to_maturity_years
+    ) // DISCOUNT_PRECISION + _intercept
+    assert new_discount < DISCOUNT_PRECISION, "new discount exceeds precision"
 
     self.slope = _slope
     self.intercept = _intercept
