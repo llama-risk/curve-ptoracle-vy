@@ -160,6 +160,17 @@ def _calculate_price() -> uint256:
     if pt_expiry <= block.timestamp:
         return underlying_price
 
+    discount: uint256 = self._calculate_discount(self.slope, self.intercept)
+
+    # Calculate discount factor (between 0 and 1 with 1e18 precision)
+    discount_factor: uint256 = DISCOUNT_PRECISION - discount
+
+    # Return discounted price: underlying_price * discount_factor / DISCOUNT_PRECISION
+    return (underlying_price * discount_factor) // DISCOUNT_PRECISION
+
+@internal
+@view
+def _calculate_discount(slope_: uint256, intercept_: uint256)-> uint256:
     time_to_maturity_seconds: uint256 = pt_expiry - block.timestamp
 
     # Convert time to maturity to years with 1e18 precision
@@ -169,15 +180,10 @@ def _calculate_price() -> uint256:
 
     # Linear discount with 1e18 precision: discount = (slope * time_to_maturity_years) / 1e18 + intercept
     discount: uint256 = (
-        self.slope * time_to_maturity_years
-    ) // DISCOUNT_PRECISION + self.intercept
+        slope_ * time_to_maturity_years
+    ) // DISCOUNT_PRECISION + intercept_
 
-    # Calculate discount factor (between 0 and 1 with 1e18 precision)
-    discount_factor: uint256 = DISCOUNT_PRECISION - discount
-
-    # Return discounted price: underlying_price * discount_factor / DISCOUNT_PRECISION
-    return (underlying_price * discount_factor) // DISCOUNT_PRECISION
-
+    return discount
 
 # View functions
 @view
@@ -233,18 +239,7 @@ def _update_discount_params(_slope: uint256, _intercept: uint256):
         intercept_change <= self.max_intercept_change
     ), "intercept change exceeds limit"
 
-    time_to_maturity_seconds: uint256 = pt_expiry - block.timestamp
-
-    # Convert time to maturity to years with 1e18 precision
-    time_to_maturity_years: uint256 = (
-        time_to_maturity_seconds * DISCOUNT_PRECISION
-    ) // SECONDS_PER_YEAR
-
-    # Validate proposed discount using new values (_slope, _intercept)
-    # This prevents setting parameters that would cause _calculate_price() to revert
-    new_discount: uint256 = (
-        _slope * time_to_maturity_years
-    ) // DISCOUNT_PRECISION + _intercept
+    new_discount: uint256= self._calculate_discount(_slope,_intercept)
     assert new_discount < DISCOUNT_PRECISION, "new discount exceeds precision"
 
     self.slope = _slope
