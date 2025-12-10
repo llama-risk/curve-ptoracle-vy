@@ -42,7 +42,8 @@ intercept: public(uint256)  # Linear discount intercept with 1e18 precision
 min_update_interval: public(uint256)
 pt_expiry: public(immutable(uint256))
 
-# Limit variables for slope and intercept changes (0 = no limit)
+# Limit variables for slope and intercept changes
+# max_value(uint256) = no limit (default); 0 = no changes allowed (freeze)
 max_slope_change: public(uint256)  # Maximum allowed change in slope per update
 max_intercept_change: public(
     uint256
@@ -52,7 +53,7 @@ max_intercept_change: public(
 last_update: public(uint256)
 last_price: public(uint256)
 
-# Rate limiting for set_linear_discount
+# Rate limiting for discount parameter updates (set_linear_discount and set_slope_from_apy)
 last_discount_update: public(uint256)
 
 # Events
