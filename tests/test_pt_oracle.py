@@ -944,3 +944,392 @@ def price() -> uint256:
         # Parameter admin should not be able to grant parameter_admin role
         with boa.reverts():
             pt_oracle.grantRole(PARAMETER_ADMIN_ROLE, new_user, sender=parameter_admin)
+
+
+class TestDiscountParameterValidationFix:
+    """
+    Tests for discount parameter validation in _update_discount_params().
+
+    These tests verify that parameter updates are validated correctly using
+    the proposed values, ensuring the resulting discount stays within valid bounds.
+    """
+
+    def test_rejects_params_that_would_exceed_discount_precision(self, deployer, manager, parameter_admin, admin):
+        """
+        Test that the oracle rejects new discount params that would cause
+        discount >= DISCOUNT_PRECISION, which would cause underflow in _calculate_price.
+        """
+        from contracts import PtOracle
+
+        mock_pt_code = """
+# pragma version 0.4.3
+
+expiry: public(uint256)
+
+@deploy
+def __init__(_expiry: uint256):
+    self.expiry = _expiry
+"""
+        mock_oracle_code = """
+# pragma version 0.4.3
+
+@view
+@external
+def price() -> uint256:
+    return 10**18
+"""
+
+        with boa.env.prank(deployer):
+            # Set expiry to exactly 1 year from now
+            one_year_later = boa.env.timestamp + (365 * 24 * 60 * 60)
+            pt = boa.loads(mock_pt_code, one_year_later)
+            mock_oracle = boa.loads(mock_oracle_code)
+
+            # Deploy with safe initial params: slope=5%, intercept=0
+            pt_oracle = PtOracle.deploy(
+                pt.address,
+                mock_oracle.address,
+                5 * 10**16,  # 5% per year slope
+                0,           # 0% intercept
+                0,           # no rate limiting for this test
+                manager,
+                parameter_admin,
+                admin
+            )
+
+        # Set no change limits to allow large changes for testing
+        pt_oracle.set_limits(0, 2**256 - 1, 2**256 - 1, sender=parameter_admin)
+
+        # Advance time by 1 second for rate limiting (uses > operator)
+        boa.env.timestamp += 1
+
+        # At ~1 year to maturity:
+        # If slope = 50% and intercept = 51%, discount = 0.5 * ~1.0 + 0.51 ≈ 1.01 > DISCOUNT_PRECISION
+        # This should fail because discount must be < DISCOUNT_PRECISION
+        with boa.reverts("new discount exceeds precision"):
+            pt_oracle.set_linear_discount(5 * 10**17, 51 * 10**16, sender=manager)
+
+        # Boundary case: slope = 50.1% and intercept = 50%
+        # discount > DISCOUNT_PRECISION
+        # This should fail
+        with boa.reverts("new discount exceeds precision"):
+            pt_oracle.set_linear_discount(501 * 10**15, 5 * 10**17, sender=manager)
+
+        # Valid case: slope = 49% and intercept = 50%, at ~1 year:
+        # discount = 0.49 * ~1.0 + 0.5 ≈ 0.99 < DISCOUNT_PRECISION
+        # This should succeed
+        pt_oracle.set_linear_discount(49 * 10**16, 5 * 10**17, sender=manager)
+        assert pt_oracle.slope() == 49 * 10**16
+        assert pt_oracle.intercept() == 5 * 10**17
+
+    def test_validates_proposed_values_not_stored_values(self, deployer, manager, parameter_admin, admin):
+        """
+        Test that validation uses the proposed values, not the stored values.
+        """
+        from contracts import PtOracle
+
+        mock_pt_code = """
+# pragma version 0.4.3
+
+expiry: public(uint256)
+
+@deploy
+def __init__(_expiry: uint256):
+    self.expiry = _expiry
+"""
+        mock_oracle_code = """
+# pragma version 0.4.3
+
+@view
+@external
+def price() -> uint256:
+    return 10**18
+"""
+
+        with boa.env.prank(deployer):
+            # Set expiry to exactly 1 year from now
+            one_year_later = boa.env.timestamp + (365 * 24 * 60 * 60)
+            pt = boa.loads(mock_pt_code, one_year_later)
+            mock_oracle = boa.loads(mock_oracle_code)
+
+            # Deploy with low initial params
+            pt_oracle = PtOracle.deploy(
+                pt.address,
+                mock_oracle.address,
+                10**16,  # 1% per year slope
+                0,       # 0% intercept
+                0,       # no rate limiting
+                manager,
+                parameter_admin,
+                admin
+            )
+
+        # Remove change limits
+        pt_oracle.set_limits(0, 2**256 - 1, 2**256 - 1, sender=parameter_admin)
+
+        # Try to set params that would cause 100%+ discount
+        # At ~1 year: discount = 1.0 * ~1.0 + 0.1 > 100%
+        boa.env.timestamp += 1
+        with boa.reverts("new discount exceeds precision"):
+            pt_oracle.set_linear_discount(10**18, 10**17, sender=manager)
+
+        # Verify stored values are unchanged (update was rejected)
+        assert pt_oracle.slope() == 10**16
+        assert pt_oracle.intercept() == 0
+
+        # Verify price() still works
+        price = pt_oracle.price()
+        assert price > 0
+        assert price < 10**18
+
+    def test_price_works_after_valid_update(self, deployer, manager, parameter_admin, admin):
+        """
+        Verify that after a valid parameter update, price() still works correctly.
+        """
+        from contracts import PtOracle
+
+        mock_pt_code = """
+# pragma version 0.4.3
+
+expiry: public(uint256)
+
+@deploy
+def __init__(_expiry: uint256):
+    self.expiry = _expiry
+"""
+        mock_oracle_code = """
+# pragma version 0.4.3
+
+@view
+@external
+def price() -> uint256:
+    return 10**18
+"""
+
+        with boa.env.prank(deployer):
+            # 6 months to expiry
+            six_months_later = boa.env.timestamp + (182 * 24 * 60 * 60)
+            pt = boa.loads(mock_pt_code, six_months_later)
+            mock_oracle = boa.loads(mock_oracle_code)
+
+            pt_oracle = PtOracle.deploy(
+                pt.address,
+                mock_oracle.address,
+                10**17,  # 10% per year slope
+                0,       # 0% intercept
+                0,       # no rate limiting
+                manager,
+                parameter_admin,
+                admin
+            )
+
+        # Remove change limits
+        pt_oracle.set_limits(0, 2**256 - 1, 2**256 - 1, sender=parameter_admin)
+
+        # Get initial price
+        initial_price = pt_oracle.price()
+
+        # Update to higher but still valid params
+        # At 0.5 years: discount = 0.5 * 0.5 + 0.2 = 0.45 = 45% (valid)
+        boa.env.timestamp += 1
+        pt_oracle.set_linear_discount(5 * 10**17, 2 * 10**17, sender=manager)
+
+        # Price should still work and be lower (higher discount)
+        new_price = pt_oracle.price()
+        assert new_price > 0
+        assert new_price < initial_price  # Higher discount = lower price
+
+        # price_w should also work
+        boa.env.timestamp += 1
+        cached_price = pt_oracle.price_w()
+        assert cached_price > 0
+
+    def test_set_slope_from_apy_also_validates_correctly(self, deployer, manager, parameter_admin, admin):
+        """
+        Ensure set_slope_from_apy validates the resulting discount correctly.
+        """
+        from contracts import PtOracle
+
+        mock_pt_code = """
+# pragma version 0.4.3
+
+expiry: public(uint256)
+
+@deploy
+def __init__(_expiry: uint256):
+    self.expiry = _expiry
+"""
+        mock_oracle_code = """
+# pragma version 0.4.3
+
+@view
+@external
+def price() -> uint256:
+    return 10**18
+"""
+
+        with boa.env.prank(deployer):
+            # Set expiry to exactly 1 year from now
+            one_year_later = boa.env.timestamp + (365 * 24 * 60 * 60)
+            pt = boa.loads(mock_pt_code, one_year_later)
+            mock_oracle = boa.loads(mock_oracle_code)
+
+            pt_oracle = PtOracle.deploy(
+                pt.address,
+                mock_oracle.address,
+                5 * 10**16,  # 5% per year slope
+                0,           # 0% intercept
+                0,           # no rate limiting
+                manager,
+                parameter_admin,
+                admin
+            )
+
+        # Remove change limits
+        pt_oracle.set_limits(0, 2**256 - 1, 2**256 - 1, sender=parameter_admin)
+
+        boa.env.timestamp += 1
+
+        # Valid case: 1000% APY gives slope ≈ 90.9%
+        # At ~1 year: discount ≈ 90.9% < 100%
+        pt_oracle.set_slope_from_apy(10 * 10**18, sender=manager)
+        assert pt_oracle.slope() > 0
+        assert pt_oracle.intercept() == 0
+
+        # Verify price works
+        price = pt_oracle.price()
+        assert price > 0
+        assert price < 10**18
+
+    def test_set_slope_from_apy_with_existing_intercept(self, deployer, manager, parameter_admin, admin):
+        """
+        Test set_slope_from_apy when there's an existing intercept that combined
+        with the new slope would exceed the discount limit.
+
+        Note: set_slope_from_apy always sets intercept to 0, so this tests that
+        even with a high APY, the validation passes because intercept becomes 0.
+        """
+        from contracts import PtOracle
+
+        mock_pt_code = """
+# pragma version 0.4.3
+
+expiry: public(uint256)
+
+@deploy
+def __init__(_expiry: uint256):
+    self.expiry = _expiry
+"""
+        mock_oracle_code = """
+# pragma version 0.4.3
+
+@view
+@external
+def price() -> uint256:
+    return 10**18
+"""
+
+        with boa.env.prank(deployer):
+            # Set expiry to exactly 1 year from now
+            one_year_later = boa.env.timestamp + (365 * 24 * 60 * 60)
+            pt = boa.loads(mock_pt_code, one_year_later)
+            mock_oracle = boa.loads(mock_oracle_code)
+
+            # Deploy with high intercept (50%)
+            pt_oracle = PtOracle.deploy(
+                pt.address,
+                mock_oracle.address,
+                5 * 10**16,  # 5% per year slope
+                5 * 10**17,  # 50% intercept
+                0,           # no rate limiting
+                manager,
+                parameter_admin,
+                admin
+            )
+
+        # Remove change limits
+        pt_oracle.set_limits(0, 2**256 - 1, 2**256 - 1, sender=parameter_admin)
+
+        boa.env.timestamp += 1
+
+        # With current intercept=50%, setting slope to 51% via set_linear_discount would fail
+        # because discount = 51% * ~1.0 + 50% > 100%
+        with boa.reverts("new discount exceeds precision"):
+            pt_oracle.set_linear_discount(51 * 10**16, 5 * 10**17, sender=manager)
+
+        # But set_slope_from_apy resets intercept to 0, so high APY should work
+        # 500% APY gives slope ≈ 83.3%, with intercept=0: discount ≈ 83.3% < 100%
+        pt_oracle.set_slope_from_apy(5 * 10**18, sender=manager)
+        assert pt_oracle.intercept() == 0  # Intercept was reset to 0
+        assert pt_oracle.slope() > 8 * 10**17  # Slope should be ~83.3%
+
+        # Verify price works
+        price = pt_oracle.price()
+        assert price > 0
+
+    def test_shorter_maturity_allows_higher_params(self, deployer, manager, parameter_admin, admin):
+        """
+        Test that with shorter time to maturity, higher slope values are acceptable
+        because the total discount is still under 100%.
+        """
+        from contracts import PtOracle
+
+        mock_pt_code = """
+# pragma version 0.4.3
+
+expiry: public(uint256)
+
+@deploy
+def __init__(_expiry: uint256):
+    self.expiry = _expiry
+"""
+        mock_oracle_code = """
+# pragma version 0.4.3
+
+@view
+@external
+def price() -> uint256:
+    return 10**18
+"""
+
+        with boa.env.prank(deployer):
+            # Only 30 days to expiry (30/365 = ~0.082 years)
+            thirty_days_later = boa.env.timestamp + (30 * 24 * 60 * 60)
+            pt = boa.loads(mock_pt_code, thirty_days_later)
+            mock_oracle = boa.loads(mock_oracle_code)
+
+            pt_oracle = PtOracle.deploy(
+                pt.address,
+                mock_oracle.address,
+                5 * 10**16,  # 5% per year slope
+                0,           # 0% intercept
+                0,           # no rate limiting
+                manager,
+                parameter_admin,
+                admin
+            )
+
+        # Remove change limits
+        pt_oracle.set_limits(0, 2**256 - 1, 2**256 - 1, sender=parameter_admin)
+
+        # With 30 days (~0.082 years) to maturity:
+        # discount = slope * 0.082 + intercept
+        # Even with slope = 100% (1e18), discount = 0.082 + 0 = 8.2% (valid!)
+        boa.env.timestamp += 1
+        pt_oracle.set_linear_discount(10**18, 0, sender=manager)
+        assert pt_oracle.slope() == 10**18
+
+        # But if we add high intercept, it should fail
+        # discount = 1.0 * 0.082 + 0.95 = 1.032 > 100%
+        boa.env.timestamp += 1
+        with boa.reverts("new discount exceeds precision"):
+            pt_oracle.set_linear_discount(10**18, 95 * 10**16, sender=manager)
+
+        # Intercept of 91% should work: 0.082 + 0.91 = 0.992 < 100%
+        boa.env.timestamp += 1
+        pt_oracle.set_linear_discount(10**18, 91 * 10**16, sender=manager)
+        assert pt_oracle.intercept() == 91 * 10**16
+
+        # Verify price works
+        price = pt_oracle.price()
+        assert price > 0
