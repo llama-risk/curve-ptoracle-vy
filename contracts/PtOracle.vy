@@ -68,10 +68,6 @@ event LimitsUpdated:
     new_max_intercept_change: uint256
 
 
-event PriceUpdated:
-    new_price: indexed(uint256)
-
-
 event OracleInitialized:
     pt: indexed(IPendlePT)
     underlying_oracle: indexed(IOracle)
@@ -147,10 +143,6 @@ def __init__(
         new_intercept=_intercept,
     )
 
-    log PriceUpdated(
-        new_price=initial_price,
-    )
-
 
 # Internal functions
 @internal
@@ -221,9 +213,6 @@ def price_w() -> uint256:
     # Update price and timestamp
     self.last_price = new_price
     self.last_update = block.timestamp
-
-    # Emit price update event
-    log PriceUpdated(new_price=new_price)
 
     return new_price
 
