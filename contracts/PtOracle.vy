@@ -35,8 +35,8 @@ PARAMETER_ADMIN_ROLE: public(constant(bytes32)) = keccak256(
 ADMIN_ROLE: public(constant(bytes32)) = keccak256("ADMIN_ROLE")
 
 # State variables
-pt: public(IPendlePT)
-underlying_oracle: public(IOracle)
+pt: public(immutable(IPendlePT))
+underlying_oracle: public(immutable(IOracle))
 slope: public(uint256)  # Linear discount slope with 1e18 precision
 intercept: public(uint256)  # Linear discount intercept with 1e18 precision
 min_update_interval: public(uint256)
@@ -116,8 +116,8 @@ def __init__(
     # Revoke default admin role from deployer
     access_control._revoke_role(access_control.DEFAULT_ADMIN_ROLE, msg.sender)
 
-    self.pt = _pt
-    self.underlying_oracle = _underlying_oracle
+    pt = _pt
+    underlying_oracle = _underlying_oracle
     self.slope = _slope
     self.intercept = _intercept
     self.min_update_interval = _min_update_interval
@@ -133,8 +133,10 @@ def __init__(
     )  # Initialize discount update timestamp
     pt_expiry = staticcall _pt.expiry()
 
-    # Initialize price
-    self.last_price = self._calculate_price()
+    
+    initial_price: uint256 = self._calculate_price()
+
+    self.last_price = initial_price
 
     # Emit initialization event
     log OracleInitialized(pt=_pt, underlying_oracle=_underlying_oracle)
@@ -145,7 +147,7 @@ def __init__(
     )
 
     log PriceUpdated(
-        new_price=self.last_price,
+        new_price=initial_price,
     )
 
 
@@ -155,11 +157,22 @@ def __init__(
 def _calculate_price() -> uint256:
 
     # Get underlying oracle price and apply discount
-    underlying_price: uint256 = staticcall self.underlying_oracle.price()
+    underlying_price: uint256 = staticcall underlying_oracle.price()
 
     if pt_expiry <= block.timestamp:
         return underlying_price
 
+    discount: uint256 = self._calculate_discount(self.slope, self.intercept)
+
+    # Calculate discount factor (between 0 and 1 with 1e18 precision)
+    discount_factor: uint256 = DISCOUNT_PRECISION - discount
+
+    # Return discounted price: underlying_price * discount_factor / DISCOUNT_PRECISION
+    return (underlying_price * discount_factor) // DISCOUNT_PRECISION
+
+@internal
+@view
+def _calculate_discount(slope_: uint256, intercept_: uint256)-> uint256:
     time_to_maturity_seconds: uint256 = pt_expiry - block.timestamp
 
     # Convert time to maturity to years with 1e18 precision
@@ -169,20 +182,19 @@ def _calculate_price() -> uint256:
 
     # Linear discount with 1e18 precision: discount = (slope * time_to_maturity_years) / 1e18 + intercept
     discount: uint256 = (
-        self.slope * time_to_maturity_years
-    ) // DISCOUNT_PRECISION + self.intercept
+        slope_ * time_to_maturity_years
+    ) // DISCOUNT_PRECISION + intercept_
 
-    # Calculate discount factor (between 0 and 1 with 1e18 precision)
-    discount_factor: uint256 = DISCOUNT_PRECISION - discount
-
-    # Return discounted price: underlying_price * discount_factor / DISCOUNT_PRECISION
-    return (underlying_price * discount_factor) // DISCOUNT_PRECISION
+    return discount
 
 
-# View functions
 @view
 @external
 def price() -> uint256:
+    """
+    @notice Returns the current PT price using the underlying oracle and the latest discount parameters.
+    @return The freshly computed discounted price of the PT.
+    """
     return self._calculate_price()
 
 
@@ -190,9 +202,15 @@ def price() -> uint256:
 @external
 @nonpayable
 def price_w() -> uint256:
+    """
+    @notice Returns the updated PT price and updates stored price cache.
+    @dev If called multiple times in the same block, returns the cached value to save gas.
+    @return The PT price after applying discount logic. If already updated this block, returns cached price.
+    """
+
     # If PT has expired, return underlying oracle price
     if pt_expiry <= block.timestamp:
-        return staticcall self.underlying_oracle.price()
+        return staticcall underlying_oracle.price()
 
     if block.timestamp == self.last_update:
         return self.last_price
@@ -212,39 +230,33 @@ def price_w() -> uint256:
 # Internal function to update discount parameters
 @internal
 def _update_discount_params(_slope: uint256, _intercept: uint256):
+
+    # Cache storage reads to avoid multiple SLOADs
+    old_slope: uint256 = self.slope
+    old_intercept: uint256 = self.intercept
+    
     # Validate slope and intercept bounds to prevent extreme discounts
     assert _slope <= DISCOUNT_PRECISION, "slope exceeds precision"
     assert _intercept <= DISCOUNT_PRECISION, "intercept exceeds precision"
 
     # Check slope change limit
     slope_change: uint256 = 0
-    if _slope > self.slope:
-        slope_change = _slope - self.slope
+    if _slope > old_slope:
+        slope_change = _slope - old_slope
     else:
-        slope_change = self.slope - _slope
+        slope_change = old_slope - _slope
     assert (slope_change <= self.max_slope_change), "slope change exceeds limit"
 
     intercept_change: uint256 = 0
-    if _intercept > self.intercept:
-        intercept_change = _intercept - self.intercept
+    if _intercept > old_intercept:
+        intercept_change = _intercept - old_intercept
     else:
-        intercept_change = self.intercept - _intercept
+        intercept_change = old_intercept - _intercept
     assert (
         intercept_change <= self.max_intercept_change
     ), "intercept change exceeds limit"
 
-    time_to_maturity_seconds: uint256 = pt_expiry - block.timestamp
-
-    # Convert time to maturity to years with 1e18 precision
-    time_to_maturity_years: uint256 = (
-        time_to_maturity_seconds * DISCOUNT_PRECISION
-    ) // SECONDS_PER_YEAR
-
-    # Validate proposed discount using new values (_slope, _intercept)
-    # This prevents setting parameters that would cause _calculate_price() to revert
-    new_discount: uint256 = (
-        _slope * time_to_maturity_years
-    ) // DISCOUNT_PRECISION + _intercept
+    new_discount: uint256= self._calculate_discount(_slope,_intercept)
     assert new_discount < DISCOUNT_PRECISION, "new discount exceeds precision"
 
     self.slope = _slope
@@ -261,6 +273,14 @@ def _update_discount_params(_slope: uint256, _intercept: uint256):
 @external
 @nonpayable
 def set_linear_discount(_slope: uint256, _intercept: uint256):
+    """
+    @notice Updates the linear discount parameters (slope and intercept).
+    @param _slope The new slope value with 1e18 precision.
+    @param _intercept The new intercept value with 1e18 precision.
+    @dev Can only be called by an account with MANAGER_ROLE.
+    @dev Enforced by rate limiting: updates are only allowed after min_update_interval since the last discount update.
+    @dev Also validates that slope and intercept changes do not exceed max_slope_change and max_intercept_change.
+    """
     access_control._check_role(MANAGER_ROLE, msg.sender)
 
     # Check rate limiting - Manager can only update once per min_update_interval
@@ -314,6 +334,14 @@ def set_limits(
     _max_slope_change: uint256,
     _max_intercept_change: uint256,
 ):
+    """
+    @notice Updates configuration limits governing discount updates.
+    @param _min_update_interval Minimum allowed time (in seconds) between manager discount updates.
+    @param _max_slope_change Maximum allowed change in slope per update (0 = no limit).
+    @param _max_intercept_change Maximum allowed change in intercept per update (0 = no limit).
+    @dev Only callable by accounts with PARAMETER_ADMIN_ROLE.
+    @dev Setting a limit to zero or max(uint256) effectively removes restrictions.
+    """
     access_control._check_role(PARAMETER_ADMIN_ROLE, msg.sender)
 
     self.min_update_interval = _min_update_interval
