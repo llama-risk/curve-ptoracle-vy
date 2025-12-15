@@ -801,10 +801,10 @@ def price() -> uint256:
         pt_oracle.set_linear_discount(5 * 10**16, 4 * 10**16, sender=manager)
         assert pt_oracle.intercept() == 4 * 10**16
     
-    def test_zero_limit_means_no_restriction(self, deployer, manager, parameter_admin, admin):
-        """Test that setting max change to 0 means no limit"""
+    def test_default_max_value_limits_allow_unlimited_changes(self, deployer, manager, parameter_admin, admin):
+        """Test that default max_value(uint256) limits allow unlimited changes"""
         from contracts import PtOracle
-        
+
         mock_pt_code = """
 # pragma version 0.4.3
 
@@ -822,12 +822,12 @@ def __init__(_expiry: uint256):
 def price() -> uint256:
     return 10**18
 """
-        
+
         with boa.env.prank(deployer):
             pt = boa.loads(mock_pt_code, boa.env.timestamp + 86400 * 30)
             mock_oracle = boa.loads(mock_oracle_code)
-            
-            # Deploy with default 0 limits (no restrictions)
+
+            # Deploy with default limits (max_value(uint256) = no restrictions)
             pt_oracle = PtOracle.deploy(
                 pt.address,
                 mock_oracle.address,
@@ -838,15 +838,125 @@ def price() -> uint256:
                 parameter_admin,
                 admin
             )
-        
+
+        # Verify default limits are max_value(uint256)
+        assert pt_oracle.max_slope_change() == 2**256 - 1
+        assert pt_oracle.max_intercept_change() == 2**256 - 1
+
         # Advance time
         boa.env.timestamp = boa.env.timestamp + 86401
-        
-        # Should be able to make large changes with no limits
+
+        # Should be able to make large changes with max_value limits
         pt_oracle.set_linear_discount(90 * 10**16, 80 * 10**16, sender=manager)
         assert pt_oracle.slope() == 90 * 10**16
         assert pt_oracle.intercept() == 80 * 10**16
-    
+
+    def test_zero_limit_freezes_parameter_changes(self, pt_oracle, manager, parameter_admin):
+        """Test that setting limit to 0 prevents any non-zero change (freeze behavior)"""
+        # Set slope limit to 0 (freeze slope changes)
+        pt_oracle.set_limits(86400, 0, 2**256 - 1, sender=parameter_admin)
+
+        # Advance time to allow update
+        boa.env.timestamp = boa.env.timestamp + 86401
+
+        # Any non-zero slope change should fail
+        with boa.reverts("slope change exceeds limit"):
+            pt_oracle.set_linear_discount(5 * 10**16 + 1, 0, sender=manager)
+
+        # Even a small decrease should fail
+        with boa.reverts("slope change exceeds limit"):
+            pt_oracle.set_linear_discount(5 * 10**16 - 1, 0, sender=manager)
+
+        # Zero change (same value) should work
+        pt_oracle.set_linear_discount(5 * 10**16, 10**16, sender=manager)
+        assert pt_oracle.slope() == 5 * 10**16
+        assert pt_oracle.intercept() == 10**16
+
+        # Now test intercept freeze
+        pt_oracle.set_limits(86400, 2**256 - 1, 0, sender=parameter_admin)
+
+        # Advance time
+        boa.env.timestamp = boa.env.timestamp + 86401
+
+        # Any non-zero intercept change should fail
+        with boa.reverts("intercept change exceeds limit"):
+            pt_oracle.set_linear_discount(5 * 10**16, 10**16 + 1, sender=manager)
+
+        with boa.reverts("intercept change exceeds limit"):
+            pt_oracle.set_linear_discount(5 * 10**16, 10**16 - 1, sender=manager)
+
+        # Zero change should work
+        pt_oracle.set_linear_discount(6 * 10**16, 10**16, sender=manager)
+        assert pt_oracle.slope() == 6 * 10**16
+        assert pt_oracle.intercept() == 10**16
+
+    def test_both_limits_zero_freezes_all_changes(self, pt_oracle, manager, parameter_admin):
+        """Test that setting both limits to 0 freezes all parameter changes"""
+        # Set both limits to 0 (full freeze)
+        pt_oracle.set_limits(86400, 0, 0, sender=parameter_admin)
+
+        # Advance time
+        boa.env.timestamp = boa.env.timestamp + 86401
+
+        # Any change to slope should fail
+        with boa.reverts("slope change exceeds limit"):
+            pt_oracle.set_linear_discount(5 * 10**16 + 1, 0, sender=manager)
+
+        # Any change to intercept should fail
+        with boa.reverts("intercept change exceeds limit"):
+            pt_oracle.set_linear_discount(5 * 10**16, 1, sender=manager)
+
+        # Only exact same values should work
+        pt_oracle.set_linear_discount(5 * 10**16, 0, sender=manager)
+        assert pt_oracle.slope() == 5 * 10**16
+        assert pt_oracle.intercept() == 0
+
+    def test_limit_boundary_exactly_at_limit_passes(self, pt_oracle, manager, parameter_admin):
+        """Test that change exactly equal to limit passes"""
+        # Set slope limit to exactly 1% (10**16)
+        pt_oracle.set_limits(86400, 10**16, 10**16, sender=parameter_admin)
+
+        # Advance time
+        boa.env.timestamp = boa.env.timestamp + 86401
+
+        # Current slope is 5% (5e16), change by exactly 1% should pass
+        pt_oracle.set_linear_discount(6 * 10**16, 0, sender=manager)
+        assert pt_oracle.slope() == 6 * 10**16
+
+        # Advance time
+        boa.env.timestamp = boa.env.timestamp + 86401
+
+        # Decrease by exactly 1% should also pass
+        pt_oracle.set_linear_discount(5 * 10**16, 0, sender=manager)
+        assert pt_oracle.slope() == 5 * 10**16
+
+        # Advance time
+        boa.env.timestamp = boa.env.timestamp + 86401
+
+        # Intercept change by exactly limit should pass
+        pt_oracle.set_linear_discount(5 * 10**16, 10**16, sender=manager)
+        assert pt_oracle.intercept() == 10**16
+
+    def test_limit_boundary_exceeding_by_one_fails(self, pt_oracle, manager, parameter_admin):
+        """Test that change exceeding limit by 1 fails"""
+        # Set slope limit to exactly 1% (10**16)
+        pt_oracle.set_limits(86400, 10**16, 10**16, sender=parameter_admin)
+
+        # Advance time
+        boa.env.timestamp = boa.env.timestamp + 86401
+
+        # Current slope is 5% (5e16), change by 1% + 1 wei should fail
+        with boa.reverts("slope change exceeds limit"):
+            pt_oracle.set_linear_discount(6 * 10**16 + 1, 0, sender=manager)
+
+        # Decrease by 1% + 1 wei should also fail
+        with boa.reverts("slope change exceeds limit"):
+            pt_oracle.set_linear_discount(5 * 10**16 - 10**16 - 1, 0, sender=manager)
+
+        # Intercept change by limit + 1 should fail
+        with boa.reverts("intercept change exceeds limit"):
+            pt_oracle.set_linear_discount(5 * 10**16, 10**16 + 1, sender=manager)
+
     def test_both_limits_work_together(self, pt_oracle, manager, parameter_admin):
         """Test that both slope and intercept limits are enforced together"""
         # Set limits: 1% max slope change, 2% max intercept change
