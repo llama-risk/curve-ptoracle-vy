@@ -187,10 +187,14 @@ def _calculate_discount(slope_: uint256, intercept_: uint256)-> uint256:
 
     return discount
 
-# View functions
+
 @view
 @external
 def price() -> uint256:
+    """
+    @notice Returns the current PT price using the underlying oracle and the latest discount parameters.
+    @return The freshly computed discounted price of the PT.
+    """
     return self._calculate_price()
 
 
@@ -198,6 +202,12 @@ def price() -> uint256:
 @external
 @nonpayable
 def price_w() -> uint256:
+    """
+    @notice Returns the updated PT price and updates stored price cache.
+    @dev If called multiple times in the same block, returns the cached value to save gas.
+    @return The PT price after applying discount logic. If already updated this block, returns cached price.
+    """
+
     # If PT has expired, return underlying oracle price
     if pt_expiry <= block.timestamp:
         return staticcall underlying_oracle.price()
@@ -263,6 +273,14 @@ def _update_discount_params(_slope: uint256, _intercept: uint256):
 @external
 @nonpayable
 def set_linear_discount(_slope: uint256, _intercept: uint256):
+    """
+    @notice Updates the linear discount parameters (slope and intercept).
+    @param _slope The new slope value with 1e18 precision.
+    @param _intercept The new intercept value with 1e18 precision.
+    @dev Can only be called by an account with MANAGER_ROLE.
+    @dev Enforced by rate limiting: updates are only allowed after min_update_interval since the last discount update.
+    @dev Also validates that slope and intercept changes do not exceed max_slope_change and max_intercept_change.
+    """
     access_control._check_role(MANAGER_ROLE, msg.sender)
 
     # Check rate limiting - Manager can only update once per min_update_interval
@@ -316,6 +334,14 @@ def set_limits(
     _max_slope_change: uint256,
     _max_intercept_change: uint256,
 ):
+    """
+    @notice Updates configuration limits governing discount updates.
+    @param _min_update_interval Minimum allowed time (in seconds) between manager discount updates.
+    @param _max_slope_change Maximum allowed change in slope per update (0 = no limit).
+    @param _max_intercept_change Maximum allowed change in intercept per update (0 = no limit).
+    @dev Only callable by accounts with PARAMETER_ADMIN_ROLE.
+    @dev Setting a limit to zero or max(uint256) effectively removes restrictions.
+    """
     access_control._check_role(PARAMETER_ADMIN_ROLE, msg.sender)
 
     self.min_update_interval = _min_update_interval
