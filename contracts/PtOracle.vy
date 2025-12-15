@@ -35,8 +35,8 @@ PARAMETER_ADMIN_ROLE: public(constant(bytes32)) = keccak256(
 ADMIN_ROLE: public(constant(bytes32)) = keccak256("ADMIN_ROLE")
 
 # State variables
-pt: public(IPendlePT)
-underlying_oracle: public(IOracle)
+pt: public(immutable(IPendlePT))
+underlying_oracle: public(immutable(IOracle))
 slope: public(uint256)  # Linear discount slope with 1e18 precision
 intercept: public(uint256)  # Linear discount intercept with 1e18 precision
 min_update_interval: public(uint256)
@@ -116,8 +116,8 @@ def __init__(
     # Revoke default admin role from deployer
     access_control._revoke_role(access_control.DEFAULT_ADMIN_ROLE, msg.sender)
 
-    self.pt = _pt
-    self.underlying_oracle = _underlying_oracle
+    pt = _pt
+    underlying_oracle = _underlying_oracle
     self.slope = _slope
     self.intercept = _intercept
     self.min_update_interval = _min_update_interval
@@ -133,8 +133,10 @@ def __init__(
     )  # Initialize discount update timestamp
     pt_expiry = staticcall _pt.expiry()
 
-    # Initialize price
-    self.last_price = self._calculate_price()
+    
+    initial_price: uint256 = self._calculate_price()
+
+    self.last_price = initial_price
 
     # Emit initialization event
     log OracleInitialized(pt=_pt, underlying_oracle=_underlying_oracle)
@@ -145,7 +147,7 @@ def __init__(
     )
 
     log PriceUpdated(
-        new_price=self.last_price,
+        new_price=initial_price,
     )
 
 
@@ -155,7 +157,7 @@ def __init__(
 def _calculate_price() -> uint256:
 
     # Get underlying oracle price and apply discount
-    underlying_price: uint256 = staticcall self.underlying_oracle.price()
+    underlying_price: uint256 = staticcall underlying_oracle.price()
 
     if pt_expiry <= block.timestamp:
         return underlying_price
@@ -198,7 +200,7 @@ def price() -> uint256:
 def price_w() -> uint256:
     # If PT has expired, return underlying oracle price
     if pt_expiry <= block.timestamp:
-        return staticcall self.underlying_oracle.price()
+        return staticcall underlying_oracle.price()
 
     if block.timestamp == self.last_update:
         return self.last_price
@@ -218,23 +220,28 @@ def price_w() -> uint256:
 # Internal function to update discount parameters
 @internal
 def _update_discount_params(_slope: uint256, _intercept: uint256):
+
+    # Cache storage reads to avoid multiple SLOADs
+    old_slope: uint256 = self.slope
+    old_intercept: uint256 = self.intercept
+    
     # Validate slope and intercept bounds to prevent extreme discounts
     assert _slope <= DISCOUNT_PRECISION, "slope exceeds precision"
     assert _intercept <= DISCOUNT_PRECISION, "intercept exceeds precision"
 
     # Check slope change limit
     slope_change: uint256 = 0
-    if _slope > self.slope:
-        slope_change = _slope - self.slope
+    if _slope > old_slope:
+        slope_change = _slope - old_slope
     else:
-        slope_change = self.slope - _slope
+        slope_change = old_slope - _slope
     assert (slope_change <= self.max_slope_change), "slope change exceeds limit"
 
     intercept_change: uint256 = 0
-    if _intercept > self.intercept:
-        intercept_change = _intercept - self.intercept
+    if _intercept > old_intercept:
+        intercept_change = _intercept - old_intercept
     else:
-        intercept_change = self.intercept - _intercept
+        intercept_change = old_intercept - _intercept
     assert (
         intercept_change <= self.max_intercept_change
     ), "intercept change exceeds limit"
