@@ -130,10 +130,7 @@ def __init__(
     )  # Initialize discount update timestamp
     pt_expiry = staticcall _pt.expiry()
 
-    
-    initial_price: uint256 = self._calculate_price()
-
-    self.last_price = initial_price
+    self.last_price = self._calculate_price()
 
     # Emit initialization event
     log OracleInitialized(pt=_pt, underlying_oracle=_underlying_oracle)
@@ -163,9 +160,10 @@ def _calculate_price() -> uint256:
     # Return discounted price: underlying_price * discount_factor / DISCOUNT_PRECISION
     return (underlying_price * discount_factor) // DISCOUNT_PRECISION
 
+
 @internal
 @view
-def _calculate_discount(slope_: uint256, intercept_: uint256)-> uint256:
+def _calculate_discount(slope_: uint256, intercept_: uint256) -> uint256:
     time_to_maturity_seconds: uint256 = pt_expiry - block.timestamp
 
     # Convert time to maturity to years with 1e18 precision
@@ -224,7 +222,7 @@ def _update_discount_params(_slope: uint256, _intercept: uint256):
     # Cache storage reads to avoid multiple SLOADs
     old_slope: uint256 = self.slope
     old_intercept: uint256 = self.intercept
-    
+
     # Validate slope and intercept bounds to prevent extreme discounts
     assert _slope <= DISCOUNT_PRECISION, "slope exceeds precision"
     assert _intercept <= DISCOUNT_PRECISION, "intercept exceeds precision"
@@ -246,7 +244,7 @@ def _update_discount_params(_slope: uint256, _intercept: uint256):
         intercept_change <= self.max_intercept_change
     ), "intercept change exceeds limit"
 
-    new_discount: uint256= self._calculate_discount(_slope,_intercept)
+    new_discount: uint256 = self._calculate_discount(_slope, _intercept)
     assert new_discount < DISCOUNT_PRECISION, "new discount exceeds precision"
 
     self.slope = _slope
